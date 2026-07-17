@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createApp } from "./app.js";
+import { createApp } from "./expressApp.js";
 import { loadEnv } from "./config/env.js";
 import { logger } from "./notify/logger.js";
 

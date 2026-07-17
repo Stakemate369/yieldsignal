@@ -1,6 +1,6 @@
 import "dotenv/config";
 import type { Request, Response } from "express";
-import { createApp } from "../src/app.js";
+import { createApp } from "../src/expressApp.js";
 import { logger } from "../src/notify/logger.js";
 
 /**

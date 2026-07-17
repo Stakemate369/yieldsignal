@@ -1,6 +1,8 @@
 # YieldSignal
 
-Real-time, risk-weighted USDC lending APY across **Aave, Compound, Morpho, Moonwell, Euler and Fluid** on Base — paid per call via the [x402](https://x402.org) protocol. $0.01 USDC, no API key, no signup.
+[![CI](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml/badge.svg)](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml)
+
+Real-time, risk-weighted USDC lending APY across **Aave, Compound, Morpho, Moonwell, Euler and Fluid** on Base — paid per call via the [x402](https://x402.org) protocol. $0.01 USDC, no API key, no signup. First 3 calls/day per IP are free.
 
 **Live:** `https://yieldsignal.vercel.app`
 
@@ -21,6 +23,10 @@ const res = await fetchWithPayment("https://yieldsignal.vercel.app/signal/usdc-b
 console.log(await res.json());
 // { bestProtocol: "compound", gapBps: 57, rates: [...], asOf: "..." }
 ```
+
+### MCP
+
+Also available as a paid MCP tool at `https://yieldsignal.vercel.app/mcp` (`get_yield_signal`, no arguments) — most autonomous-agent frameworks discover/call tools via MCP rather than hand-rolled x402 HTTP clients. Uses the official [`@x402/mcp`](https://www.npmjs.com/package/@x402/mcp) package; payment is gated per tool call (`tools/list`/`initialize` stay free, only `get_yield_signal` requires payment).
 
 ### Response shape
 
@@ -46,20 +52,27 @@ Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but 
 - `src/signal/` — the pure, deterministic comparison logic (no I/O, fully unit tested).
 - `src/market-data/` — the two-layer data sourcing (direct reads + DefiLlama).
 - `src/wallet/walletLock.ts` — pins the receiver wallet address (via `EXPECTED_WALLET_ADDRESS` in production, since serverless has no persistent disk) so a CDP credential rotation is caught loudly instead of silently redirecting payments.
+- `src/mcp.ts` — the `get_yield_signal` MCP tool, gated per-call with `@x402/mcp`'s `createPaymentWrapper` (not the whole-route Express middleware, which would paywall `tools/list`/`initialize` too).
+- `src/market-data/cache.ts` — 30s TTL on every rate reader (direct + DefiLlama) so a burst of concurrent paid calls doesn't hammer public RPC/API endpoints.
+- `src/freeTrial.ts` — 3 free calls/day per IP (in-memory, best-effort — not a hard cap across serverless instances, just adoption-friction removal).
 - `src/cli/withdraw.ts` — sweeps accumulated USDC to the owner's personal wallet, manual `CONFIRM` required, never automatic.
 
 ## Local development
 
 ```bash
 npm install
-npm test                # 33 automated tests
+npm test                # automated tests (market-data readers, signal logic, retry, wallet lock, free trial)
 npm run signal           # live signal, real data, zero credentials needed
 npm run dev               # local x402 server (reads X402_ENVIRONMENT from .env)
-npm run test:paid         # spins up a test buyer wallet, funds it via the CDP faucet, pays for real (testnet only)
+npm run test:paid         # spins up a test buyer wallet, funds it via the CDP faucet, pays for real (testnet only, REST endpoint)
 npm run withdraw          # sweep accumulated USDC — asks for typed "CONFIRM"
 ```
 
 See `.env.example` for the required variables. Generate your own dedicated CDP project/credentials at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com/) — never reuse another project's.
+
+## Source
+
+[github.com/Stakemate369/yieldsignal](https://github.com/Stakemate369/yieldsignal) — open source, CI runs typecheck + full test suite on every push/PR.
 
 ## Why Spark, Seamless and Silo aren't in the protocol list
 

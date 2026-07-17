@@ -14,6 +14,7 @@ import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
 import { createMcpRequestHandler } from "./mcp.js";
 import { consumeFreeTrial } from "./freeTrial.js";
+import { LANDING_PAGE_HTML } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
 
 export const RESOURCE_PATH = "/signal/usdc-base-yield";
@@ -56,6 +57,10 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // proxy, não do chamador real — quebraria a cota gratuita por IP abaixo.
   app.set("trust proxy", true);
 
+  app.get("/", (_req, res) => {
+    res.type("html").send(LANDING_PAGE_HTML);
+  });
+
   // /mcp fica de fora do middleware de pagamento do endpoint REST (esse
   // agora é escopado só na rota GET abaixo, não é mais `app.use()` global) —
   // já foi `app.use(RESOURCE_PATH, mw)` antes, mas isso quebrou o próprio
@@ -64,7 +69,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // pra achar a rota configurada) — bug real encontrado testando a tool MCP.
   const mcpHandler = await createMcpRequestHandler(server.payToEvmAddress);
   app.post("/mcp", express.json(), mcpHandler);
-  app.get("/mcp", mcpHandler);
+  // Sem GET aqui: em modo stateful, GET /mcp abre um stream SSE de servidor
+  // pra cliente que fica aberto indefinidamente — não existe cliente
+  // esperando push nesse caso de uso (tool avulsa, sem conversa longa), e
+  // numa função serverless isso só fica pendurado até o limite de duração
+  // (bug real: 5 minutos de timeout na Vercel, visto nos logs de produção).
   app.delete("/mcp", mcpHandler);
 
   async function respondWithSignal(res: express.Response): Promise<void> {

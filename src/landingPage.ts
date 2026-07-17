@@ -27,12 +27,12 @@ export const LANDING_PAGE_HTML = `<!doctype html>
 <h1>YieldSignal</h1>
 <p class="sub">Real-time, risk-weighted USDC and WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base — paid per call via <a href="https://x402.org">x402</a>.</p>
 
-<p><span class="badge">$0.01/call</span><span class="badge">3 free/day per IP</span><span class="badge">no API key</span></p>
+<p><span class="badge">$0.01/call</span><span class="badge">3 free/day per IP via ?trial=1</span><span class="badge">no API key</span></p>
 
 <h2>REST</h2>
 <pre>GET https://yieldsignal.vercel.app/signal/usdc-base-yield
 GET https://yieldsignal.vercel.app/signal/weth-base-yield</pre>
-<p>Call it without payment and you'll get a <code>402 Payment Required</code> with the exact price/asset/network. Any x402-compatible client (e.g. <a href="https://www.npmjs.com/package/@x402/fetch">@x402/fetch</a>) completes the payment automatically.</p>
+<p>Call it without payment and you'll get a <code>402 Payment Required</code> with the exact price/asset/network. Any x402-compatible client (e.g. <a href="https://www.npmjs.com/package/@x402/fetch">@x402/fetch</a>) completes the payment automatically. Add <code>?trial=1</code> to use one of the 3 free daily calls per IP instead of paying.</p>
 
 <h2>MCP</h2>
 <pre>POST https://yieldsignal.vercel.app/mcp</pre>

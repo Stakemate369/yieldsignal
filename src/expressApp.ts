@@ -126,10 +126,18 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   for (const asset of Object.keys(RESOURCE_PATHS) as AssetId[]) {
     app.get(
       RESOURCE_PATHS[asset],
-      // Cota gratuita de degustação: se sobrar cota pra esse IP hoje, responde
-      // direto e NUNCA chama next() — o middleware de pagamento a seguir nem
-      // vê essa requisição. Esgotada a cota, cai pro fluxo pago normal.
+      // Cota gratuita de degustação, só sob opt-in explícito (?trial=1) — uma
+      // sonda de descoberta (x402scan, Bazaar, trust indexes) bate na URL sem
+      // esse parâmetro e precisa ver 402 na resposta pra classificar isso como
+      // endpoint x402; se o trial fosse concedido automaticamente na primeira
+      // request de qualquer IP novo (como era antes), a sonda via 200 e o
+      // serviço nunca aparecia em nenhum diretório (bug real, achado testando
+      // submissão no x402.fuchss.app — 2026-07-17).
       (req, res, next) => {
+        if (req.query.trial !== "1") {
+          next();
+          return;
+        }
         const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
         if (consumeFreeTrial(ip)) {
           res.setHeader("X-Free-Trial", "true");

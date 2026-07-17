@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml/badge.svg)](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml)
 
-Real-time, risk-weighted USDC and WETH lending APY across **Aave, Compound, Morpho, Moonwell, Euler and Fluid** on Base — paid per call via the [x402](https://x402.org) protocol. $0.01 USDC, no API key, no signup. First 3 calls/day per IP are free.
+Real-time, risk-weighted USDC and WETH lending APY across **Aave, Compound, Morpho, Moonwell, Euler and Fluid** on Base — paid per call via the [x402](https://x402.org) protocol. $0.01 USDC, no API key, no signup. First 3 calls/day per IP are free via `?trial=1`.
 
 **Live:** `https://yieldsignal.vercel.app`
 
@@ -56,7 +56,7 @@ Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but 
 - `src/wallet/walletLock.ts` — pins the receiver wallet address (via `EXPECTED_WALLET_ADDRESS` in production, since serverless has no persistent disk) so a CDP credential rotation is caught loudly instead of silently redirecting payments.
 - `src/mcp.ts` — the `get_yield_signal` MCP tool (optional `asset` param), gated per-call with `@x402/mcp`'s `createPaymentWrapper` (not the whole-route Express middleware, which would paywall `tools/list`/`initialize` too).
 - `src/market-data/cache.ts` — 30s TTL on every rate reader (direct + DefiLlama), one cache instance per asset, so a burst of concurrent paid calls doesn't hammer public RPC/API endpoints.
-- `src/freeTrial.ts` — 3 free calls/day per IP (in-memory, best-effort — not a hard cap across serverless instances, just adoption-friction removal).
+- `src/freeTrial.ts` — 3 free calls/day per IP (in-memory, best-effort — not a hard cap across serverless instances, just adoption-friction removal). Only applied on `?trial=1`; a bare `GET` always 402s so x402 discovery crawlers (x402scan, Bazaar, trust indexes) correctly detect this as a paid endpoint.
 - `src/notify/paymentLog.ts` — logs payer/tx/network/amount for every settled payment (`onAfterSettle`, both the REST and MCP payment servers), plus a usage line per call (paid or free) — revenue/usage visibility, not just a live product.
 - `src/cli/withdraw.ts` — sweeps accumulated USDC to the owner's personal wallet, manual `CONFIRM` required, never automatic.
 

@@ -24,6 +24,12 @@ const schema = z.object({
   EXPECTED_WALLET_ADDRESS: z
     .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{40}$/)])
     .default(""),
+  // Preenchido depois de rodar `npm run register-schema` uma vez (ver
+  // cli/registerSchema.ts) — vazio desliga `npm run attest`, resto do
+  // produto funciona normalmente sem essa variável.
+  EAS_SCHEMA_UID: z
+    .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{64}$/)])
+    .default(""),
   PORT: z.coerce.number().int().positive().default(4021),
   // Formato "Money" do x402: "$" + valor decimal. Validado aqui pra falhar
   // com uma mensagem clara no boot, em vez de um erro opaco de dentro do

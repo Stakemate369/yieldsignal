@@ -12,9 +12,11 @@ import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment } from "./notify/paymentLog.js";
+import type { SignerAccount } from "./wallet/signerAccount.js";
+import { signPayload } from "./signal/signResponse.js";
 
 const TOOL_DESCRIPTION =
-  "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Every reading tagged with its data source (onchain/api/defillama) — sources that fail are omitted, never estimated.";
+  "Real-time risk-weighted USDC or WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Result is signed (EIP-191) by the payment-receiving address, returned as a sibling content block for offline verification.";
 
 const TOOL_INPUT_SHAPE = {
   asset: z.enum(["USDC", "WETH"]).optional().describe("Which asset's lending yield to compare. Defaults to USDC."),
@@ -37,6 +39,7 @@ const TOOL_INPUT_SHAPE = {
  */
 export async function createMcpRequestHandler(
   payToEvmAddress: string,
+  signer: SignerAccount,
 ): Promise<(req: Request, res: Response) => Promise<void>> {
   const env = loadEnv();
   const network = env.X402_ENVIRONMENT === "production" ? "eip155:8453" : "eip155:84532";
@@ -78,7 +81,23 @@ export async function createMcpRequestHandler(
         logger.info({ channel: "mcp", asset }, "sinal servido");
         const readings = await collectRates(asset);
         const signal = computeSignal(readings);
-        return { content: [{ type: "text" as const, text: JSON.stringify(signal) }] };
+        // Bloco de texto original SEM alteração (é o que fica assinado) +
+        // bloco irmão com a assinatura — nunca embutir a assinatura DENTRO do
+        // mesmo objeto: obrigaria o cliente a re-serializar de volta pro
+        // texto exato assinado, frágil (ordem de chave, espaçamento).
+        const raw = JSON.stringify(signal);
+        const signed = await signPayload(signer, raw);
+        const content = [{ type: "text" as const, text: raw }];
+        if (signed) {
+          content.push({
+            type: "text" as const,
+            text: JSON.stringify({
+              verification: "EIP-191 personal_sign over the previous content block's text, verbatim",
+              ...signed,
+            }),
+          });
+        }
+        return { content };
       } catch (err) {
         logger.error({ err, asset }, "falha gerando sinal (MCP)");
         return {

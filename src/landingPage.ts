@@ -48,7 +48,14 @@ GET https://yieldsignal.vercel.app/signal/weth-base-yield</pre>
     { "protocol": "moonwell", "apyBps": 440, "weightedApyBps": 387, "source": "defillama", "asOf": "..." }
   ]
 }</pre>
-<p><code>source</code> is <code>onchain</code>/<code>api</code> (read directly from the protocol) or <code>defillama</code> (aggregator) — a reading that fails or looks invalid is omitted, never estimated.</p>
+<p><code>source</code> is <code>onchain</code>/<code>api</code> (read directly from the protocol — Aave, Compound and Morpho) or <code>defillama</code> (aggregator — Moonwell, Euler and Fluid) — a reading that fails or looks invalid is omitted, never estimated.</p>
+
+<h2>Verifiable, not just claimed</h2>
+<p>Two independent ways to check a response wasn't tampered with or fabricated, without needing to trust our uptime at query time:</p>
+<ul>
+  <li><strong>Signed responses</strong> — every REST/MCP response is signed (EIP-191 <code>personal_sign</code>) by the same <code>payTo</code> address the 402 payment requirement names for that route. REST exposes it as <code>X-Signal-Signature</code>/<code>X-Signal-Signer</code> response headers over the exact response body; MCP returns it as a sibling content block over the exact previous block's text. Verify with <a href="https://viem.sh/docs/utilities/verifyMessage">viem's <code>verifyMessage</code></a>.</li>
+  <li><strong>On-chain attestations (EAS, Base mainnet)</strong> — periodic public, permanent records of "at time T, protocol X paid Y bps, Z ahead of the runner-up," independently verifiable on <a href="https://base.easscan.org">easscan.org</a> without trusting this server at all. Attester address is that same <code>payTo</code> address.</li>
+</ul>
 
 <footer>
   Open source: <a href="https://github.com/Stakemate369/yieldsignal">github.com/Stakemate369/yieldsignal</a>

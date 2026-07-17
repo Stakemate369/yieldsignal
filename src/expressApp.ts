@@ -18,6 +18,8 @@ import { consumeFreeTrial } from "./freeTrial.js";
 import { LANDING_PAGE_HTML } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment } from "./notify/paymentLog.js";
+import { getSignerAccount } from "./wallet/signerAccount.js";
+import { signPayload } from "./signal/signResponse.js";
 
 // Um path por ativo vendido — cada um é uma rota x402 protegida separada,
 // mesmo preço/descrição-base, preço e descrição próprios só pra deixar claro
@@ -32,8 +34,8 @@ export const RESOURCE_PATHS: Record<AssetId, string> = {
 export const RESOURCE_PATH = RESOURCE_PATHS.USDC;
 
 const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
-  USDC: "Real-time risk-weighted USDC lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base — every reading tagged with its data source (onchain/api/defillama) and timestamp.",
-  WETH: "Real-time risk-weighted WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base — every reading tagged with its data source (onchain/api/defillama) and timestamp.",
+  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-191) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer headers.",
+  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-191) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer headers.",
 };
 
 /**
@@ -66,6 +68,18 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   }
   assertWalletAddress(env.X402_ENVIRONMENT, server.payToEvmAddress, env.EXPECTED_WALLET_ADDRESS);
 
+  // Segunda resolução independente da MESMA carteira (mesmo nome de conta,
+  // mesmas credenciais), só que com `signMessage` exposto — createX402Server
+  // não expõe isso. Comparação abaixo é barata e pega de graça qualquer
+  // divergência entre as duas resoluções (nunca deveria acontecer, mas o
+  // custo de checar é uma comparação de string).
+  const signer = await getSignerAccount();
+  if (signer.address.toLowerCase() !== server.payToEvmAddress.toLowerCase()) {
+    throw new Error(
+      `carteira de assinatura (${signer.address}) diverge da carteira receptora de pagamento (${server.payToEvmAddress}) — não é seguro assinar respostas com um endereço diferente do que está anunciado pro comprador.`,
+    );
+  }
+
   // Fato de pagamento (payer/tx/network/valor real) — as duas rotas REST
   // compartilham este único x402ResourceServer, então o registro é um só
   // aqui; ver notify/paymentLog.ts pro porquê de não travar a liquidação se
@@ -96,7 +110,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // casamento de rota do middleware (Express remove o prefixo de `req.url`
   // dentro de middleware montado com caminho, e o x402 usa o path original
   // pra achar a rota configurada) — bug real encontrado testando a tool MCP.
-  const mcpHandler = await createMcpRequestHandler(server.payToEvmAddress);
+  const mcpHandler = await createMcpRequestHandler(server.payToEvmAddress, signer);
   app.post("/mcp", express.json(), mcpHandler);
   // Sem GET aqui: em modo stateful, GET /mcp abre um stream SSE de servidor
   // pra cliente que fica aberto indefinidamente — não existe cliente
@@ -109,7 +123,17 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     try {
       const readings = await collectRates(asset);
       const signal = computeSignal(readings);
-      res.json(signal);
+      // `res.send(raw)` em vez de `res.json(signal)` — precisa ser o MESMO
+      // texto que foi assinado abaixo, byte a byte, senão a assinatura não
+      // bate na verificação do lado do cliente (res.json re-serializaria com
+      // as opções de formatação do Express, que não são garantidas iguais).
+      const raw = JSON.stringify(signal);
+      const signed = await signPayload(signer, raw);
+      if (signed) {
+        res.setHeader("X-Signal-Signature", signed.signature);
+        res.setHeader("X-Signal-Signer", signed.signer);
+      }
+      res.type("application/json").send(raw);
     } catch (err) {
       logger.error({ err, asset }, "falha gerando sinal");
       res.status(503).json({ error: "falha temporária lendo taxas — tente de novo em instantes" });

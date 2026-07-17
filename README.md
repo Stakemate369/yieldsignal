@@ -46,6 +46,13 @@ Every rate is tagged with **where it came from** — `onchain`/`api` (Aave, Comp
 }
 ```
 
+## Verifiability
+
+Two independent ways to check a response wasn't tampered with or fabricated, neither requiring you to trust this server's uptime at the moment you check:
+
+- **Signed responses** — every REST/MCP response is signed (EIP-191 `personal_sign`) by the same `payTo` address the 402 payment requirement names. REST: `X-Signal-Signature`/`X-Signal-Signer` headers over the exact response body. MCP: a sibling content block over the exact preceding block's text. Verify with [viem's `verifyMessage`](https://viem.sh/docs/utilities/verifyMessage).
+- **On-chain attestations** ([EAS](https://attest.org), Base mainnet) — periodic, public, permanent records of "at time T, protocol X paid Y bps, Z ahead of the runner-up," independently checkable on [easscan.org](https://base.easscan.org) without trusting this server at all. Same attester address as the signed responses above. See `src/attestation/`, `src/cli/registerSchema.ts` and `src/cli/attestSignal.ts` — attestation is a manual, deliberately-triggered action (real gas cost each time), not an automatic background job.
+
 ## Architecture
 
 Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but **fully separate**: own CDP credentials, own receiver wallet, no shared runtime code. See `CLAUDE.md` and `SECURITY.md` for the full technical writeup and threat model.
@@ -59,6 +66,9 @@ Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but 
 - `src/freeTrial.ts` — 3 free calls/day per IP (in-memory, best-effort — not a hard cap across serverless instances, just adoption-friction removal). Only applied on `?trial=1`; a bare `GET` always 402s so x402 discovery crawlers (x402scan, Bazaar, trust indexes) correctly detect this as a paid endpoint.
 - `src/notify/paymentLog.ts` — logs payer/tx/network/amount for every settled payment (`onAfterSettle`, both the REST and MCP payment servers), plus a usage line per call (paid or free) — revenue/usage visibility, not just a live product.
 - `src/cli/withdraw.ts` — sweeps accumulated USDC to the owner's personal wallet, manual `CONFIRM` required, never automatic.
+- `src/wallet/signerAccount.ts` — resolves the same receiver wallet with `signMessage`/`sendTransaction` exposed (`createX402Server` only exposes the address); used for response signing and EAS attestation.
+- `src/attestation/` — EAS schema definition and calldata encoding (pure, unit tested) for the on-chain attestation described above.
+- `src/cli/registerSchema.ts` / `src/cli/attestSignal.ts` — one-time schema registration and manual per-attestation publishing, same `CONFIRM` pattern as `withdraw.ts`.
 
 ## Local development
 
@@ -69,6 +79,8 @@ npm run signal            # live signal, real data, zero credentials needed (USD
 npm run dev               # local x402 server (reads X402_ENVIRONMENT from .env)
 npm run test:paid         # spins up a test buyer wallet, funds it via the CDP faucet, pays for real (testnet only, REST endpoint)
 npm run withdraw          # sweep accumulated USDC — asks for typed "CONFIRM"
+npm run register-schema   # one-time EAS schema registration (mainnet, real gas) — asks for typed "CONFIRM"
+npm run attest             # publish one on-chain attestation of the current signal (mainnet, real gas) — asks for typed "CONFIRM"
 ```
 
 See `.env.example` for the required variables. Generate your own dedicated CDP project/credentials at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com/) — never reuse another project's.

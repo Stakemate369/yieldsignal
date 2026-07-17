@@ -84,6 +84,19 @@ export const BASE_ASSETS: Record<
   },
 };
 
+/**
+ * EAS (Ethereum Attestation Service) — predeploys padrão de qualquer chain OP
+ * Stack, MESMO endereço em toda a Superchain (Base incluída). Conferidos
+ * direto contra `deployments/base/{EAS,SchemaRegistry}.json` em
+ * github.com/ethereum-attestation-service/eas-contracts (branch master) em
+ * 2026-07-17 — não adivinhados: endereço errado aqui perderia gas real sem
+ * nunca registrar/atestar nada.
+ */
+export const EAS_BASE_MAINNET = {
+  eas: "0x4200000000000000000000000000000000000021" as const,
+  schemaRegistry: "0x4200000000000000000000000000000000000020" as const,
+};
+
 // Nome da conta CDP usada como carteira receptora dos pagamentos x402 — usado
 // tanto por server.ts (payToConfig.accountName, explícito em vez de depender
 // do default implícito do SDK) quanto por cli/withdraw.ts (getOrCreateAccount

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.development
+.env.production
+*.sqlite
+state/*.json
+!state/.gitkeep
+cdp_api_key*.json
+cdp_wallet_secret.txt
+
+.vercel

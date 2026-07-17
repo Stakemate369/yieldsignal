@@ -28,8 +28,9 @@ describe("readCompoundSupplyApy", () => {
     // fração por segundo equivalente a ~5% de taxa anual linear
     const perSecond = (0.05 * Number(FACTOR_SCALE)) / (365 * 24 * 60 * 60);
     mockUtilizationAndSupplyRate(BigInt(Math.round(perSecond)));
-    const reading = await readCompoundSupplyApy();
+    const reading = await readCompoundSupplyApy("USDC");
     expect(reading.protocol).toBe("compound");
+    expect(reading.asset).toBe("USDC");
     expect(reading.source).toBe("onchain");
     expect(reading.supplyApyBps).toBeGreaterThan(500);
     expect(reading.supplyApyBps).toBeLessThan(520);
@@ -45,26 +46,47 @@ describe("readCompoundSupplyApy", () => {
       }
       throw new Error("função inesperada");
     });
-    await readCompoundSupplyApy();
+    await readCompoundSupplyApy("USDC");
     expect(utilizationSeen).toBe(777n);
   });
 
   it("supplyRate zero vira 0 bps", async () => {
     mockUtilizationAndSupplyRate(0n);
-    const reading = await readCompoundSupplyApy();
+    const reading = await readCompoundSupplyApy("USDC");
     expect(reading.supplyApyBps).toBe(0);
   });
 
   it("cacheia por TTL — duas chamadas seguidas não dobram as leituras on-chain", async () => {
     mockUtilizationAndSupplyRate(1000n);
-    await readCompoundSupplyApy();
+    await readCompoundSupplyApy("USDC");
     const callsAfterFirst = readContractMock.mock.calls.length;
-    await readCompoundSupplyApy();
+    await readCompoundSupplyApy("USDC");
     expect(readContractMock.mock.calls.length).toBe(callsAfterFirst);
   });
 
   it("propaga erro se a leitura on-chain falhar", async () => {
     readContractMock.mockRejectedValue(new Error("RPC Request failed."));
-    await expect(readCompoundSupplyApy()).rejects.toThrow("RPC Request failed.");
+    await expect(readCompoundSupplyApy("USDC")).rejects.toThrow("RPC Request failed.");
+  });
+
+  it("lê o Comet de WETH (endereço diferente do de USDC) quando asset=WETH — e mantém cache próprio, separado do de USDC", async () => {
+    let addressSeen: string | undefined;
+    readContractMock.mockImplementation(async ({ address, functionName }: { address: string; functionName: string }) => {
+      addressSeen = address;
+      if (functionName === "getUtilization") return 0n;
+      if (functionName === "getSupplyRate") return 0n;
+      throw new Error("função inesperada");
+    });
+    await readCompoundSupplyApy("WETH");
+    const wethComet = addressSeen;
+    await readCompoundSupplyApy("USDC");
+    const usdcComet = addressSeen;
+    expect(wethComet).not.toBe(usdcComet);
+
+    // as duas primeiras chamadas fizeram 4 leituras (2 por asset); repetir
+    // WETH não deve gerar novas leituras — cache isolado por asset.
+    const callsSoFar = readContractMock.mock.calls.length;
+    await readCompoundSupplyApy("WETH");
+    expect(readContractMock.mock.calls.length).toBe(callsSoFar);
   });
 });

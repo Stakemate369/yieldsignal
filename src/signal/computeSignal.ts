@@ -1,4 +1,4 @@
-import type { ProtocolId, RateReading } from "../market-data/types.js";
+import type { AssetId, ProtocolId, RateReading } from "../market-data/types.js";
 import { weightedApyBps } from "../strategy/riskWeights.js";
 
 export interface SignalRate {
@@ -10,6 +10,7 @@ export interface SignalRate {
 }
 
 export interface YieldSignal {
+  asset: AssetId;
   bestProtocol: ProtocolId;
   /** Diferença em bps entre o 1º e o 2º colocado (ponderado por risco) — quanto maior, mais clara a vantagem. */
   gapBps: number;
@@ -43,6 +44,10 @@ export function computeSignal(readings: RateReading[]): YieldSignal {
   const gapBps = second ? best.weightedApyBps - second.weightedApyBps : 0;
 
   return {
+    // Todas as leituras de uma chamada vêm de collectRates(asset) pro MESMO
+    // asset — seguro pegar do primeiro item em vez de exigir o parâmetro de
+    // novo aqui (computeSignal continua puro, sem I/O, só dados que já chegam).
+    asset: readings[0].asset,
     bestProtocol: best.protocol,
     gapBps,
     rates,

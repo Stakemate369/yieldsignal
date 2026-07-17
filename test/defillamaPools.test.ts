@@ -31,46 +31,66 @@ afterEach(() => {
 describe("readDefiLlamaPoolApy", () => {
   it("retorna a leitura normalmente quando o pool bate poolId+project+chain+symbol", async () => {
     mockPoolsResponse([FLUID_POOL]);
-    const reading = await readDefiLlamaPoolApy("fluid");
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
     expect(reading).not.toBeNull();
+    expect(reading?.asset).toBe("USDC");
     expect(reading?.supplyApyBps).toBe(503);
     expect(reading?.source).toBe("defillama");
   });
 
   it("omite (retorna null) em vez de reportar 0% quando a DefiLlama devolve apy: null — bug real encontrado em revisão", async () => {
     mockPoolsResponse([{ ...FLUID_POOL, apy: null }]);
-    const reading = await readDefiLlamaPoolApy("fluid");
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
     expect(reading).toBeNull();
   });
 
   it("omite quando apy é NaN/não-finito", async () => {
     mockPoolsResponse([{ ...FLUID_POOL, apy: Number.NaN }]);
-    const reading = await readDefiLlamaPoolApy("fluid");
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
     expect(reading).toBeNull();
   });
 
   it("omite quando o TVL está abaixo do piso mínimo (pool possivelmente morto)", async () => {
     mockPoolsResponse([{ ...FLUID_POOL, tvlUsd: 10 }]);
-    const reading = await readDefiLlamaPoolApy("fluid");
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
     expect(reading).toBeNull();
   });
 
   it("omite quando o pool id bate mas project/chain/symbol não — checagem em dupla camada", async () => {
     mockPoolsResponse([{ ...FLUID_POOL, project: "outro-projeto-qualquer" }]);
-    const reading = await readDefiLlamaPoolApy("fluid");
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
     expect(reading).toBeNull();
   });
 
   it("omite (não lança) quando a API da DefiLlama responde erro", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
-    const reading = await readDefiLlamaPoolApy("fluid");
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
     expect(reading).toBeNull();
   });
 
   it("dispara só UMA chamada de fetch pras 3 leituras da Camada 2 em paralelo — regressão do bug de stampede", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [FLUID_POOL] }) });
     vi.stubGlobal("fetch", fetchMock);
-    await Promise.all([readDefiLlamaPoolApy("fluid"), readDefiLlamaPoolApy("fluid"), readDefiLlamaPoolApy("fluid")]);
+    await Promise.all([
+      readDefiLlamaPoolApy("fluid", "USDC"),
+      readDefiLlamaPoolApy("fluid", "USDC"),
+      readDefiLlamaPoolApy("fluid", "USDC"),
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("pra WETH, casa symbol 'ETH' (não 'WETH') na Fluid — cada projeto lista o mesmo ativo diferente", async () => {
+    const fluidWeth = { ...FLUID_POOL, pool: "c0b49fb8-d73c-42ec-8538-c2b3feb69242", symbol: "ETH", apy: 0.66 };
+    mockPoolsResponse([fluidWeth]);
+    const reading = await readDefiLlamaPoolApy("fluid", "WETH");
+    expect(reading).not.toBeNull();
+    expect(reading?.asset).toBe("WETH");
+  });
+
+  it("pra WETH, NÃO casa um pool com symbol 'WETH' na Fluid (ela lista como 'ETH', não 'WETH')", async () => {
+    const wrongSymbol = { ...FLUID_POOL, pool: "c0b49fb8-d73c-42ec-8538-c2b3feb69242", symbol: "WETH", apy: 0.66 };
+    mockPoolsResponse([wrongSymbol]);
+    const reading = await readDefiLlamaPoolApy("fluid", "WETH");
+    expect(reading).toBeNull();
   });
 });

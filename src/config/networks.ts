@@ -1,5 +1,6 @@
 import { base, baseSepolia } from "viem/chains";
 import type { Chain } from "viem";
+import type { AssetId } from "../market-data/types.js";
 
 /**
  * O produto vendido é sempre sobre taxas reais da Base mainnet — não faz
@@ -52,6 +53,36 @@ export const BASE_MAINNET: NetworkConfig = {
 // Vault MetaMorpho USDC usado como referência — mesmo endereço já validado
 // com depósito/saque real no YieldPilot (2026-07-16), não escolhido às cegas.
 export const MORPHO_USDC_VAULT: `0x${string}` = "0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61";
+
+/**
+ * Endereços por ativo vendido — cada leitor de Camada 1 (aave/compound/morpho)
+ * indexa aqui em vez de receber endereço solto, pra nunca ter USDC e WETH
+ * misturados por engano num cache ou numa chamada de contrato.
+ *
+ * WETH verificado ao vivo em 2026-07-17 (não adivinhado):
+ * - token: predeploy padrão da Base (mesmo endereço em toda a Superchain),
+ *   confirmado via campo `asset.address` da própria API do Morpho.
+ * - compoundComet: raw.githubusercontent.com/compound-finance/comet/main/
+ *   deployments/base/weth/roots.json, campo "comet" — mesma fonte oficial já
+ *   citada acima pro Comet de USDC.
+ * - morphoVault: maior TVL retornado pela query `vaults` da API oficial do
+ *   Morpho (chainId 8453, assetSymbol WETH) — "Moonwell Flagship ETH".
+ */
+export const BASE_ASSETS: Record<
+  AssetId,
+  { token: `0x${string}`; compoundComet: `0x${string}`; morphoVault: `0x${string}` }
+> = {
+  USDC: {
+    token: BASE_MAINNET.usdc,
+    compoundComet: BASE_MAINNET.compound.comet,
+    morphoVault: MORPHO_USDC_VAULT,
+  },
+  WETH: {
+    token: "0x4200000000000000000000000000000000000006",
+    compoundComet: "0x46e6b214b524310239732D51387075E0e70970bf",
+    morphoVault: "0xa0E430870c4604CcfC7B38Ca7845B1FF653D0ff1",
+  },
+};
 
 // Nome da conta CDP usada como carteira receptora dos pagamentos x402 — usado
 // tanto por server.ts (payToConfig.accountName, explícito em vez de depender

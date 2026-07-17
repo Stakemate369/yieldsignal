@@ -1,6 +1,6 @@
-import { BASE_MAINNET, MORPHO_USDC_VAULT } from "../config/networks.js";
+import { BASE_MAINNET, BASE_ASSETS } from "../config/networks.js";
 import { cachedWithTtl } from "./cache.js";
-import type { RateReading } from "./types.js";
+import type { AssetId, RateReading } from "./types.js";
 
 const MORPHO_API = "https://api.morpho.org/graphql";
 const CACHE_TTL_MS = 30_000;
@@ -36,13 +36,14 @@ interface MorphoApiResponse {
  * rewards, e reimplementar esse cálculo por conta própria é onde bug silencioso
  * mais provavelmente entraria.
  */
-async function readMorphoVaultApyUncached(): Promise<RateReading> {
+async function readMorphoVaultApyUncached(asset: AssetId): Promise<RateReading> {
+  const vaultAddress = BASE_ASSETS[asset].morphoVault;
   const res = await fetch(MORPHO_API, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       query: QUERY,
-      variables: { address: MORPHO_USDC_VAULT, chainId: BASE_MAINNET.chainId },
+      variables: { address: vaultAddress, chainId: BASE_MAINNET.chainId },
     }),
   });
 
@@ -60,17 +61,26 @@ async function readMorphoVaultApyUncached(): Promise<RateReading> {
   // pra vault sem dado — visto na prática, não é só um caso teórico de tipo).
   if (netApy === undefined || netApy === null || !Number.isFinite(netApy)) {
     throw new Error(
-      `Morpho API não retornou netApy válido pro vault ${MORPHO_USDC_VAULT} na chain ${BASE_MAINNET.chainId} (valor: ${netApy})`,
+      `Morpho API não retornou netApy válido pro vault ${vaultAddress} na chain ${BASE_MAINNET.chainId} (valor: ${netApy})`,
     );
   }
 
   return {
     protocol: "morpho",
+    asset,
     supplyApyBps: Math.round(netApy * 10_000),
     source: "api",
     readAt: new Date(),
   };
 }
 
-// TTL curto (30s) — mesmo motivo do cache em aave.ts/compound.ts.
-export const readMorphoVaultApy = cachedWithTtl(readMorphoVaultApyUncached, CACHE_TTL_MS);
+// TTL curto (30s) — mesmo motivo do cache em aave.ts/compound.ts. Um cache
+// por asset, mesmo raciocínio de isolamento já aplicado lá.
+const cachedReaders: Record<AssetId, () => Promise<RateReading>> = {
+  USDC: cachedWithTtl(() => readMorphoVaultApyUncached("USDC"), CACHE_TTL_MS),
+  WETH: cachedWithTtl(() => readMorphoVaultApyUncached("WETH"), CACHE_TTL_MS),
+};
+
+export function readMorphoVaultApy(asset: AssetId): Promise<RateReading> {
+  return cachedReaders[asset]();
+}

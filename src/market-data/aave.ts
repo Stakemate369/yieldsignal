@@ -1,8 +1,8 @@
-import { BASE_MAINNET } from "../config/networks.js";
+import { BASE_MAINNET, BASE_ASSETS } from "../config/networks.js";
 import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
-import type { RateReading } from "./types.js";
+import type { AssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -32,12 +32,12 @@ const POOL_DATA_PROVIDER_ABI = [
   },
 ] as const;
 
-async function readAaveSupplyApyUncached(): Promise<RateReading> {
+async function readAaveSupplyApyUncached(asset: AssetId): Promise<RateReading> {
   const data = await basePublicClient.readContract({
     address: BASE_MAINNET.aave.poolDataProvider,
     abi: POOL_DATA_PROVIDER_ABI,
     functionName: "getReserveData",
-    args: [BASE_MAINNET.usdc],
+    args: [BASE_ASSETS[asset].token],
   });
 
   const liquidityRate = data[5]; // liquidityRate é o 6º valor do tuple
@@ -46,6 +46,7 @@ async function readAaveSupplyApyUncached(): Promise<RateReading> {
 
   return {
     protocol: "aave",
+    asset,
     supplyApyBps: compoundedRateToApyBps(aprFraction, false),
     source: "onchain",
     readAt: new Date(),
@@ -55,4 +56,13 @@ async function readAaveSupplyApyUncached(): Promise<RateReading> {
 // TTL curto (30s) — protege contra rajada de chamadas pagas simultâneas
 // batendo no RPC público a cada uma; `readAt` no resultado continua
 // refletindo a hora real da leitura, não quando foi servido do cache.
-export const readAaveSupplyApy = cachedWithTtl(readAaveSupplyApyUncached, CACHE_TTL_MS);
+// Um cache por asset (não um cache só) — senão uma leitura de WETH serviria
+// do cache de USDC (ou vice-versa) até o TTL expirar.
+const cachedReaders: Record<AssetId, () => Promise<RateReading>> = {
+  USDC: cachedWithTtl(() => readAaveSupplyApyUncached("USDC"), CACHE_TTL_MS),
+  WETH: cachedWithTtl(() => readAaveSupplyApyUncached("WETH"), CACHE_TTL_MS),
+};
+
+export function readAaveSupplyApy(asset: AssetId): Promise<RateReading> {
+  return cachedReaders[asset]();
+}

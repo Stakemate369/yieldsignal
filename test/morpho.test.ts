@@ -29,24 +29,25 @@ afterEach(() => {
 describe("readMorphoVaultApy", () => {
   it("retorna a leitura normalmente com um netApy válido", async () => {
     mockGraphqlResponse(0.0427);
-    const reading = await readMorphoVaultApy();
+    const reading = await readMorphoVaultApy("USDC");
+    expect(reading.asset).toBe("USDC");
     expect(reading.supplyApyBps).toBe(427);
     expect(reading.source).toBe("api");
   });
 
   it("lança erro claro (não retorna 0%) quando netApy é null — bug real encontrado em revisão", async () => {
     mockGraphqlResponse(null);
-    await expect(readMorphoVaultApy()).rejects.toThrow(/netApy válido/);
+    await expect(readMorphoVaultApy("USDC")).rejects.toThrow(/netApy válido/);
   });
 
   it("lança erro claro quando netApy está ausente (undefined)", async () => {
     mockGraphqlResponse(undefined);
-    await expect(readMorphoVaultApy()).rejects.toThrow(/netApy válido/);
+    await expect(readMorphoVaultApy("USDC")).rejects.toThrow(/netApy válido/);
   });
 
   it("lança erro quando a API responde HTTP de erro", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
-    await expect(readMorphoVaultApy()).rejects.toThrow(/respondeu 500/);
+    await expect(readMorphoVaultApy("USDC")).rejects.toThrow(/respondeu 500/);
   });
 
   it("lança erro quando a API responde com `errors`", async () => {
@@ -54,7 +55,7 @@ describe("readMorphoVaultApy", () => {
       "fetch",
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ errors: [{ message: "vault not found" }] }) }),
     );
-    await expect(readMorphoVaultApy()).rejects.toThrow(/vault not found/);
+    await expect(readMorphoVaultApy("USDC")).rejects.toThrow(/vault not found/);
   });
 
   it("cacheia por TTL — duas chamadas seguidas fazem só 1 fetch", async () => {
@@ -63,8 +64,22 @@ describe("readMorphoVaultApy", () => {
       json: async () => ({ data: { vaultByAddress: { state: { netApy: 0.05 } } } }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    await readMorphoVaultApy();
-    await readMorphoVaultApy();
+    await readMorphoVaultApy("USDC");
+    await readMorphoVaultApy("USDC");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("consulta o vault de WETH (endereço diferente do de USDC) quando asset=WETH", async () => {
+    let addressSeen: string | undefined;
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      addressSeen = (JSON.parse(init.body).variables as { address: string }).address;
+      return { ok: true, json: async () => ({ data: { vaultByAddress: { state: { netApy: 0.03 } } } }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await readMorphoVaultApy("WETH");
+    const wethVault = addressSeen;
+    await readMorphoVaultApy("USDC");
+    const usdcVault = addressSeen;
+    expect(wethVault).not.toBe(usdcVault);
   });
 });

@@ -2,8 +2,13 @@ import { describe, it, expect } from "vitest";
 import { computeSignal } from "../src/signal/computeSignal.js";
 import type { RateReading } from "../src/market-data/types.js";
 
-function reading(protocol: RateReading["protocol"], supplyApyBps: number, source: RateReading["source"] = "onchain"): RateReading {
-  return { protocol, supplyApyBps, source, readAt: new Date("2026-07-16T12:00:00.000Z") };
+function reading(
+  protocol: RateReading["protocol"],
+  supplyApyBps: number,
+  source: RateReading["source"] = "onchain",
+  asset: RateReading["asset"] = "USDC",
+): RateReading {
+  return { protocol, asset, supplyApyBps, source, readAt: new Date("2026-07-16T12:00:00.000Z") };
 }
 
 describe("computeSignal", () => {
@@ -46,5 +51,10 @@ describe("computeSignal", () => {
     const order = signal.rates.map((r) => r.protocol);
     expect(order[0]).toBe("compound");
     expect(order[order.length - 1]).toBe("morpho");
+  });
+
+  it("expõe o asset das leituras no sinal", () => {
+    const signal = computeSignal([reading("aave", 300, "onchain", "WETH")]);
+    expect(signal.asset).toBe("WETH");
   });
 });

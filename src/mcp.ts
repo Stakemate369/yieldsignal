@@ -6,13 +6,19 @@ import { createPaymentWrapper } from "@x402/mcp";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { createCdpFacilitatorClient } from "@coinbase/cdp-sdk/x402";
 import type { Request, Response } from "express";
+import { z } from "zod";
 import { loadEnv } from "./config/env.js";
 import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
 import { logger } from "./notify/logger.js";
+import { logSettledPayment } from "./notify/paymentLog.js";
 
 const TOOL_DESCRIPTION =
-  "Real-time risk-weighted USDC lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Every reading tagged with its data source (onchain/api/defillama) — sources that fail are omitted, never estimated.";
+  "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Every reading tagged with its data source (onchain/api/defillama) — sources that fail are omitted, never estimated.";
+
+const TOOL_INPUT_SHAPE = {
+  asset: z.enum(["USDC", "WETH"]).optional().describe("Which asset's lending yield to compare. Defaults to USDC."),
+};
 
 /**
  * Expõe o mesmo sinal vendido em `/signal/usdc-base-yield` como uma tool MCP
@@ -51,19 +57,30 @@ export async function createMcpRequestHandler(
 
   const paid = createPaymentWrapper(resourceServer, { accepts });
 
+  // Fato de pagamento — resourceServer daqui é uma instância PRÓPRIA do
+  // canal MCP (não a do endpoint REST, ver expressApp.ts), por isso o
+  // registro é feito aqui também, com channel fixo em "mcp".
+  resourceServer.onAfterSettle(async (context) => {
+    logSettledPayment(context, "mcp");
+  });
+
   const mcpServer = new McpServer({ name: "yieldsignal", version: "1.0.0" });
 
   mcpServer.tool(
     "get_yield_signal",
     TOOL_DESCRIPTION,
-    {},
-    paid(async () => {
+    TOOL_INPUT_SHAPE,
+    paid(async ({ asset = "USDC" }) => {
       try {
-        const readings = await collectRates();
+        // Fato de uso — a tool paga só é chamada depois que `paid()` já
+        // aprovou o pagamento, então toda chamada aqui é paga (ao contrário
+        // do REST, o MCP não tem free trial).
+        logger.info({ channel: "mcp", asset }, "sinal servido");
+        const readings = await collectRates(asset);
         const signal = computeSignal(readings);
         return { content: [{ type: "text" as const, text: JSON.stringify(signal) }] };
       } catch (err) {
-        logger.error({ err }, "falha gerando sinal (MCP)");
+        logger.error({ err, asset }, "falha gerando sinal (MCP)");
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ error: "falha temporária lendo taxas" }) }],
           isError: true,

@@ -1,0 +1,51 @@
+/**
+ * REFERÊNCIA NÃO TESTADA — ver integrations/README.md. Escrito a partir do
+ * formato conhecido de plugin do GOAT SDK (classe que estende `PluginBase`,
+ * métodos decorados com `@Tool`), sem `@goat-sdk/core` instalado pra
+ * confirmar contra a versão atual. Confira `PluginBase`/`Tool`/`Chain` antes
+ * de usar.
+ *
+ * npm install @goat-sdk/core yieldsignal-client @coinbase/cdp-sdk zod
+ */
+import { PluginBase, Tool } from "@goat-sdk/core";
+import type { Chain, WalletClientBase } from "@goat-sdk/core";
+import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
+import { createYieldSignalClient } from "yieldsignal-client";
+import { z } from "zod";
+
+const GetYieldSignalParams = z.object({
+  asset: z.enum(["USDC", "WETH"]).optional().default("USDC"),
+});
+
+/**
+ * Paga $0.01 (x402, Base) por chamada via uma carteira CDP PRÓPRIA do
+ * plugin (CDP_API_KEY_ID/SECRET/WALLET_SECRET no ambiente do agente) — não
+ * reaproveita o `WalletClientBase` do próprio GOAT, pelo mesmo motivo
+ * documentado nos outros dois adapters (adaptar o signer é específico da
+ * versão instalada, não dava pra verificar aqui sem o pacote).
+ */
+class YieldSignalToolset {
+  @Tool({
+    name: "get_yield_signal",
+    description:
+      "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Costs $0.01 USDC per call via x402.",
+  })
+  async getYieldSignal(parameters: z.infer<typeof GetYieldSignalParams>): Promise<string> {
+    const client = new CdpX402Client();
+    const yieldSignal = createYieldSignalClient(client);
+    const signal = await yieldSignal.getSignal(parameters.asset);
+    return JSON.stringify(signal);
+  }
+}
+
+export class YieldSignalPlugin extends PluginBase<WalletClientBase> {
+  constructor() {
+    super("yieldsignal", [new YieldSignalToolset()]);
+  }
+
+  supportsChain = (chain: Chain): boolean => chain.type === "evm";
+}
+
+export function yieldsignal(): YieldSignalPlugin {
+  return new YieldSignalPlugin();
+}

@@ -19,7 +19,11 @@ import { LANDING_PAGE_HTML } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment } from "./notify/paymentLog.js";
 import { getSignerAccount } from "./wallet/signerAccount.js";
-import { signPayload } from "./signal/signResponse.js";
+import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
+import { runAutoAttestForAsset } from "./attestation/autoAttest.js";
+import { buildTrackRecord } from "./attestation/trackRecord.js";
+import { TRACK_RECORD_PAGE_HTML } from "./trackRecordPage.js";
+import { AGENT_CARD_JSON } from "./agentCard.js";
 
 // Um path por ativo vendido — cada um é uma rota x402 protegida separada,
 // mesmo preço/descrição-base, preço e descrição próprios só pra deixar claro
@@ -34,8 +38,8 @@ export const RESOURCE_PATHS: Record<AssetId, string> = {
 export const RESOURCE_PATH = RESOURCE_PATHS.USDC;
 
 const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
-  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-191) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer headers.",
-  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-191) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer headers.",
+  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers.",
+  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers.",
 };
 
 /**
@@ -104,6 +108,64 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     res.json({ status: "ok", asOf: new Date().toISOString() });
   });
 
+  // Gatilho de atestação automática — pensado pra ser chamado por um cron
+  // EXTERNO (cron-job.org, mesmo serviço já usado pro /health; Vercel Cron no
+  // plano Hobby só dispara 1x/dia, cedo demais pra isso). DIFERENTE do padrão
+  // "vazio = endpoint aberto" usado em checks read-only: aqui vazio SEMPRE
+  // nega (fail-closed), porque a rota pode gastar ETH de gas real — só roda
+  // se CRON_TRIGGER_SECRET estiver configurado E o header bater exatamente.
+  // Cada asset é isolado (Promise.allSettled não é nem preciso — o próprio
+  // runAutoAttestForAsset nunca lança, sempre devolve um resultado) pra um
+  // erro num asset não esconder o resultado do outro.
+  app.post("/internal/auto-attest", express.json(), async (req, res) => {
+    if (!env.CRON_TRIGGER_SECRET || req.headers.authorization !== `Bearer ${env.CRON_TRIGGER_SECRET}`) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    if (env.X402_ENVIRONMENT !== "production" || !env.EAS_SCHEMA_UID) {
+      res.status(400).json({ error: "auto-attest exige X402_ENVIRONMENT=production e EAS_SCHEMA_UID configurado" });
+      return;
+    }
+    const results = await Promise.all(
+      (Object.keys(RESOURCE_PATHS) as AssetId[]).map((asset) =>
+        runAutoAttestForAsset(asset, {
+          signer,
+          schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+          minGasReserveEth: env.MIN_GAS_RESERVE_ETH,
+        }),
+      ),
+    );
+    res.json({ results });
+  });
+
+  // Dashboard de track record — fonte da verdade é o próprio EAS (attestation/
+  // trackRecord.ts), sem pagamento e sem banco novo. EAS_SCHEMA_UID vazio
+  // degrada pra lista vazia (nada foi atestado ainda), nunca erro 5xx.
+  app.get("/track-record.json", async (_req, res) => {
+    if (!env.EAS_SCHEMA_UID) {
+      res.json({ schemaUid: null, attester: signer.address, entries: [] });
+      return;
+    }
+    try {
+      const entries = await buildTrackRecord({ schemaUid: env.EAS_SCHEMA_UID as `0x${string}`, attester: signer.address });
+      res.json({ schemaUid: env.EAS_SCHEMA_UID, attester: signer.address, entries });
+    } catch (err) {
+      logger.error({ err }, "falha montando track record");
+      res.status(503).json({ error: "falha temporária consultando o histórico de atestações — tente de novo em instantes" });
+    }
+  });
+
+  app.get("/track-record", (_req, res) => {
+    res.type("html").send(TRACK_RECORD_PAGE_HTML);
+  });
+
+  // Registration file ERC-8004 (ver attestation/erc8004.ts) — estático até o
+  // registro on-chain acontecer (npm run register-agent), quando o agentId
+  // real é adicionado ao array `registrations` (ver comentário em agentCard.ts).
+  app.get("/agent-card.json", (_req, res) => {
+    res.type("application/json").send(AGENT_CARD_JSON);
+  });
+
   // /mcp fica de fora do middleware de pagamento do endpoint REST (esse
   // agora é escopado só na rota GET abaixo, não é mais `app.use()` global) —
   // já foi `app.use(RESOURCE_PATH, mw)` antes, mas isso quebrou o próprio
@@ -128,10 +190,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // bate na verificação do lado do cliente (res.json re-serializaria com
       // as opções de formatação do Express, que não são garantidas iguais).
       const raw = JSON.stringify(signal);
-      const signed = await signPayload(signer, raw);
+      const signed = await signPayload(signer, raw, signal);
       if (signed) {
         res.setHeader("X-Signal-Signature", signed.signature);
         res.setHeader("X-Signal-Signer", signed.signer);
+        res.setHeader("X-Signal-Eip712-Payload", JSON.stringify(eip712ForTransport(signed.eip712)));
       }
       res.type("application/json").send(raw);
     } catch (err) {

@@ -30,6 +30,16 @@ const schema = z.object({
   EAS_SCHEMA_UID: z
     .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{64}$/)])
     .default(""),
+  // Protege POST /internal/auto-attest (gasta ETH real de gas quando dispara)
+  // — DIFERENTE do padrão usado em checks read-only: aqui vazio significa
+  // NEGAR sempre (fail-closed), nunca "endpoint aberto por falta de config",
+  // porque a rota pode gastar fundo real. Configurado no cron-job.org como
+  // header `Authorization: Bearer <valor>`.
+  CRON_TRIGGER_SECRET: z.string().default(""),
+  // Piso de saldo de ETH abaixo do qual auto-attest se recusa a gastar mais
+  // gas (pra nunca zerar o saldo sozinho) — resto do saque manual continua
+  // funcionando normalmente mesmo abaixo desse piso.
+  MIN_GAS_RESERVE_ETH: z.coerce.number().nonnegative().default(0.0005),
   PORT: z.coerce.number().int().positive().default(4021),
   // Formato "Money" do x402: "$" + valor decimal. Validado aqui pra falhar
   // com uma mensagem clara no boot, em vez de um erro opaco de dentro do

@@ -26,7 +26,8 @@
   },
   "homepage": "https://yieldsignal.vercel.app",
   "dependencies": {
-    "@x402/fetch": "^2.18.0"
+    "@x402/fetch": "^2.18.0",
+    "viem": "^2.21.54"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

@@ -1,12 +1,15 @@
 import { CdpClient } from "@coinbase/cdp-sdk";
+import type { TypedDataDefinition } from "viem";
 import { loadEnv } from "../config/env.js";
 import { X402_RECEIVER_ACCOUNT_NAME, withdrawNetworkFor } from "../config/networks.js";
 import { assertWalletAddress } from "./walletLock.js";
 
 export interface SignerAccount {
   address: `0x${string}`;
-  /** EIP-191 personal_sign — usado pra provar autenticidade de uma resposta, sem gas. */
+  /** EIP-191 personal_sign — mantido pra quem ainda depende dele; a resposta do produto assina via signTypedData (ver signal/signResponse.ts). */
   signMessage: (message: string) => Promise<`0x${string}`>;
+  /** EIP-712 typed data — usado pra assinar a resposta do produto (signal/signResponse.ts), formato estruturado que espelha os campos do schema EAS. */
+  signTypedData: (typedData: TypedDataDefinition) => Promise<`0x${string}`>;
   /** Envia uma transação já montada (to/data/value) — usado só pelos scripts de atestação, nunca em request path. */
   sendTransaction: (tx: { to: `0x${string}`; data: `0x${string}`; value?: bigint }) => Promise<`0x${string}`>;
 }
@@ -47,6 +50,7 @@ async function resolve(): Promise<SignerAccount> {
   return {
     address: account.address as `0x${string}`,
     signMessage: (message: string) => account.signMessage({ message }),
+    signTypedData: (typedData: TypedDataDefinition) => account.signTypedData(typedData),
     sendTransaction: async ({ to, data, value }) => {
       const { transactionHash } = await networkAccount.sendTransaction({
         transaction: { to, data, value: value ?? 0n },

@@ -25,6 +25,16 @@ const weth = await yieldSignal.getSignal(); // defaults to USDC
 console.log(usdc.bestProtocol, usdc.gapBps, usdc.rates);
 ```
 
+## Verifying the response wasn't tampered with
+
+Every response is signed (EIP-712 typed data) by the same address the x402 payment went to. `getSignalVerified` fetches the signal AND checks the signature for you (via `viem.verifyTypedData` + a `contentHash` check against the exact response body):
+
+```ts
+const { signal, verified, signer } = await yieldSignal.getSignalVerified("USDC");
+if (!verified) throw new Error("signature check failed — don't trust this response");
+console.log(signal.bestProtocol, "signed by", signer);
+```
+
 ## Local development
 
 Point at a local `npm run dev` instance instead of the live service:

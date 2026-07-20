@@ -13,10 +13,10 @@ import { computeSignal } from "./signal/computeSignal.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment } from "./notify/paymentLog.js";
 import type { SignerAccount } from "./wallet/signerAccount.js";
-import { signPayload } from "./signal/signResponse.js";
+import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 
 const TOOL_DESCRIPTION =
-  "Real-time risk-weighted USDC or WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Result is signed (EIP-191) by the payment-receiving address, returned as a sibling content block for offline verification.";
+  "Real-time risk-weighted USDC or WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Result is signed (EIP-712 typed data) by the payment-receiving address, returned as a sibling content block for offline verification.";
 
 const TOOL_INPUT_SHAPE = {
   asset: z.enum(["USDC", "WETH"]).optional().describe("Which asset's lending yield to compare. Defaults to USDC."),
@@ -86,14 +86,17 @@ export async function createMcpRequestHandler(
         // mesmo objeto: obrigaria o cliente a re-serializar de volta pro
         // texto exato assinado, frágil (ordem de chave, espaçamento).
         const raw = JSON.stringify(signal);
-        const signed = await signPayload(signer, raw);
+        const signed = await signPayload(signer, raw, signal);
         const content = [{ type: "text" as const, text: raw }];
         if (signed) {
           content.push({
             type: "text" as const,
             text: JSON.stringify({
-              verification: "EIP-191 personal_sign over the previous content block's text, verbatim",
-              ...signed,
+              verification:
+                "EIP-712 typed data signature (see eip712.domain/types/message) — eip712.message.contentHash is keccak256 of the previous content block's text, verbatim",
+              signature: signed.signature,
+              signer: signed.signer,
+              eip712: eip712ForTransport(signed.eip712),
             }),
           });
         }

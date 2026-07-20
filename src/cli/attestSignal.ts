@@ -1,9 +1,8 @@
 import readline from "node:readline/promises";
-import { createPublicClient, decodeEventLog, formatEther, http } from "viem";
+import { createPublicClient, formatEther, http } from "viem";
 import { loadEnv } from "../config/env.js";
-import { EAS_BASE_MAINNET, withdrawNetworkFor } from "../config/networks.js";
-import { EAS_ABI } from "../attestation/schema.js";
-import { buildAttestCalldata } from "../attestation/encodeSignalAttestation.js";
+import { withdrawNetworkFor } from "../config/networks.js";
+import { publishAttestation } from "../attestation/publishAttestation.js";
 import { collectRates } from "../signal/collectRates.js";
 import { computeSignal } from "../signal/computeSignal.js";
 import type { AssetId } from "../market-data/types.js";
@@ -20,7 +19,9 @@ const VALID_ASSETS: AssetId[] = ["USDC", "WETH"];
  * cli/withdraw.ts, CONFIRM digitado à mão): cada chamada gasta um pouco de
  * ETH real de gas, então a frequência é decisão de quem roda, não algo
  * automatizado sem revisão. `npm run attest` (USDC, default) ou
- * `npm run attest -- WETH`.
+ * `npm run attest -- WETH`. Ver `attestation/autoAttest.ts` pro gatilho
+ * automático (decide sozinho QUANDO vale atestar, sem CONFIRM — usado pela
+ * rota `/internal/auto-attest`, não por este script).
  */
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -66,57 +67,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const data = buildAttestCalldata(env.EAS_SCHEMA_UID as `0x${string}`, signal);
+  console.log("\nEnviando transação...");
+  const { transactionHash, uid } = await publishAttestation({
+    signal,
+    signer,
+    schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+  });
 
-  // Mesmo cuidado de cli/withdraw.ts: um erro aqui pode ter acontecido DEPOIS
-  // do envio já ter sido aceito (RPC lag, timeout da API da CDP) — reenviar
-  // às cegas arrisca publicar uma atestação duplicada. Saldo de ETH caindo é
-  // o sinal indireto de que a transação pode ter saído mesmo com erro.
-  let transactionHash: `0x${string}`;
-  try {
-    transactionHash = await signer.sendTransaction({ to: EAS_BASE_MAINNET.eas, data });
-  } catch (err) {
-    const balanceAfter = await publicClient.getBalance({ address: signer.address }).catch(() => ethBalance);
-    if (balanceAfter < ethBalance) {
-      throw new Error(
-        `O envio deu erro, mas o saldo de ETH já caiu de ${formatEther(ethBalance)} pra ${formatEther(balanceAfter)} — ` +
-          `a transação pode ter saído mesmo assim. NÃO rode "npm run attest" de novo antes de conferir no BaseScan/EASScan ` +
-          `se já existe uma atestação recente de ${signer.address}. Erro original: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    throw new Error(
-      `Falha ao enviar a transação — saldo de ETH intacto (${formatEther(ethBalance)}), seguro tentar de novo. ` +
-        `Erro original: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  console.log(`\nTransação enviada: ${transactionHash}`);
-  console.log("Aguardando confirmação...");
-
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: transactionHash });
-  if (receipt.status !== "success") {
-    throw new Error(`Transação confirmou com status "${receipt.status}" — confira no BaseScan antes de tentar de novo.`);
-  }
-
-  const attestedLog = receipt.logs
-    .filter((log) => log.address.toLowerCase() === EAS_BASE_MAINNET.eas.toLowerCase())
-    .map((log) => {
-      try {
-        return decodeEventLog({ abi: EAS_ABI, eventName: "Attested", ...log });
-      } catch {
-        return undefined;
-      }
-    })
-    .find((decoded) => decoded !== undefined);
-
-  if (!attestedLog) {
-    throw new Error(
-      `Transação confirmou (${transactionHash}) mas não achei o evento "Attested" nos logs — confira manualmente no BaseScan.`,
-    );
-  }
-
-  const uid = attestedLog.args.uid;
   logger.info({ transactionHash, uid, asset: signal.asset, bestProtocol: signal.bestProtocol }, "sinal atestado on-chain");
-  console.log(`\nAtestação publicada com sucesso.`);
+  console.log(`\nTransação: ${transactionHash}`);
+  console.log(`Atestação publicada com sucesso.`);
   console.log(`UID: ${uid}`);
   console.log(`Verificar: https://base.easscan.org/attestation/view/${uid}`);
 }

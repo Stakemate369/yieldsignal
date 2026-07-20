@@ -11,6 +11,7 @@
     "withdraw": "tsx src/cli/withdraw.ts",
     "register-schema": "tsx src/cli/registerSchema.ts",
     "attest": "tsx src/cli/attestSignal.ts",
+    "register-agent": "tsx src/cli/registerAgent.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:paid": "tsx scripts/testPaidCall.mts"

@@ -1,13 +1,13 @@
 /**
- * REFERÊNCIA NÃO TESTADA — ver integrations/README.md. Escrito a partir do
- * formato conhecido de plugin da ElizaOS (`Plugin` com `actions: Action[]`,
- * cada `Action` com `validate`/`handler`/`examples`), sem o pacote
- * `@elizaos/core` instalado pra confirmar contra a versão atual. Confira os
- * tipos `Plugin`/`Action`/`HandlerCallback` antes de usar.
+ * Verificado contra @elizaos/core@1.7.2 real (typecheck + teste unitário em
+ * test/integrations/elizaos.test.ts) — não é mais referência não testada.
+ * Único desvio real encontrado contra a suposição inicial: `Handler` exige
+ * retorno `Promise<ActionResult | void | undefined>`, não `Promise<boolean>`
+ * (API mudou desde a versão em que este adapter foi escrito de memória).
  *
  * npm install @elizaos/core yieldsignal-client @coinbase/cdp-sdk
  */
-import type { Action, HandlerCallback, IAgentRuntime, Memory, Plugin, State } from "@elizaos/core";
+import type { Action, ActionResult, HandlerCallback, IAgentRuntime, Memory, Plugin, State } from "@elizaos/core";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { createYieldSignalClient, type YieldSignalAsset } from "yieldsignal-client";
 
@@ -33,17 +33,21 @@ const getYieldSignalAction: Action = {
     _state: State | undefined,
     _options: Record<string, unknown> | undefined,
     callback?: HandlerCallback,
-  ): Promise<boolean> => {
+  ): Promise<ActionResult> => {
     const asset = parseAsset(typeof message.content?.text === "string" ? message.content.text : "");
-    const client = new CdpX402Client();
-    const yieldSignal = createYieldSignalClient(client);
-    const signal = await yieldSignal.getSignal(asset);
+    try {
+      const client = new CdpX402Client();
+      const yieldSignal = createYieldSignalClient(client);
+      const signal = await yieldSignal.getSignal(asset);
 
-    callback?.({
-      text: `Best ${signal.asset} lending rate on Base right now: ${signal.bestProtocol} (${signal.gapBps}bps ahead of the runner-up).`,
-      content: signal,
-    });
-    return true;
+      const text = `Best ${signal.asset} lending rate on Base right now: ${signal.bestProtocol} (${signal.gapBps}bps ahead of the runner-up).`;
+      await callback?.({ text, content: signal });
+      return { success: true, text, data: signal as unknown as Record<string, unknown> };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await callback?.({ text: `Failed to fetch the ${asset} yield signal: ${error}` });
+      return { success: false, error };
+    }
   },
   examples: [
     [

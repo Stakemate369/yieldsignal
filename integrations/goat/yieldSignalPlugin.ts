@@ -1,21 +1,26 @@
 /**
- * REFERÊNCIA NÃO TESTADA — ver integrations/README.md. Escrito a partir do
- * formato conhecido de plugin do GOAT SDK (classe que estende `PluginBase`,
- * métodos decorados com `@Tool`), sem `@goat-sdk/core` instalado pra
- * confirmar contra a versão atual. Confira `PluginBase`/`Tool`/`Chain` antes
- * de usar.
+ * Verificado contra @goat-sdk/core@0.5.0 real (typecheck + teste unitário em
+ * test/integrations/goat.test.ts) — não é mais referência não testada.
+ * Desvio real encontrado contra a suposição inicial: `@Tool` lê o schema do
+ * parâmetro via `design:paramtypes` (emitDecoratorMetadata), que só existe
+ * pra CLASSES — um `z.infer<typeof Schema>` (tipo puro, sem classe em
+ * runtime) não é capturável por reflection, então o parâmetro precisa ser
+ * tipado com a classe que `createToolParameters(schema)` gera, não com o
+ * tipo inferido do Zod diretamente. Typecheck não pega isso (compila igual
+ * do jeito errado); só falharia em runtime na hora do GOAT tentar achar o
+ * schema associado à tool.
  *
  * npm install @goat-sdk/core yieldsignal-client @coinbase/cdp-sdk zod
  */
-import { PluginBase, Tool } from "@goat-sdk/core";
+import { PluginBase, Tool, createToolParameters } from "@goat-sdk/core";
 import type { Chain, WalletClientBase } from "@goat-sdk/core";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { createYieldSignalClient } from "yieldsignal-client";
 import { z } from "zod";
 
-const GetYieldSignalParams = z.object({
-  asset: z.enum(["USDC", "WETH"]).optional().default("USDC"),
-});
+class GetYieldSignalParameters extends createToolParameters(
+  z.object({ asset: z.enum(["USDC", "WETH"]).optional().default("USDC") }),
+) {}
 
 /**
  * Paga $0.01 (x402, Base) por chamada via uma carteira CDP PRÓPRIA do
@@ -30,7 +35,7 @@ class YieldSignalToolset {
     description:
       "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Costs $0.01 USDC per call via x402.",
   })
-  async getYieldSignal(parameters: z.infer<typeof GetYieldSignalParams>): Promise<string> {
+  async getYieldSignal(parameters: GetYieldSignalParameters): Promise<string> {
     const client = new CdpX402Client();
     const yieldSignal = createYieldSignalClient(client);
     const signal = await yieldSignal.getSignal(parameters.asset);

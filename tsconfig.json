@@ -6,6 +6,8 @@
     "lib": ["ES2022"],
     "outDir": "dist",
     "strict": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
@@ -13,6 +15,6 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "api/**/*.ts", "scripts/**/*.mts"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "api/**/*.ts", "scripts/**/*.mts", "integrations/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

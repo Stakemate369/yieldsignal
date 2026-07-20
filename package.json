@@ -12,9 +12,11 @@
     "register-schema": "tsx src/cli/registerSchema.ts",
     "attest": "tsx src/cli/attestSignal.ts",
     "register-agent": "tsx src/cli/registerAgent.ts",
+    "give-feedback": "tsx src/cli/giveFeedback.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:paid": "tsx scripts/testPaidCall.mts"
+    "test:paid": "tsx scripts/testPaidCall.mts",
+    "verify-integrations": "npm run build && node scripts/verifyIntegrations.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.53.0",
@@ -31,11 +33,16 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@coinbase/agentkit": "^0.10.4",
+    "@elizaos/core": "^1.7.2",
+    "@goat-sdk/core": "^0.5.0",
+    "@goat-sdk/wallet-evm": "^0.3.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.2",
     "@x402/fetch": "^2.18.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "yieldsignal-client": "file:./client"
   }
 }

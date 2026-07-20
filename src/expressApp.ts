@@ -38,8 +38,8 @@ export const RESOURCE_PATHS: Record<AssetId, string> = {
 export const RESOURCE_PATH = RESOURCE_PATHS.USDC;
 
 const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
-  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers.",
-  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers.",
+  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
+  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
 };
 
 /**

@@ -16,7 +16,7 @@ import type { SignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 
 const TOOL_DESCRIPTION =
-  "Real-time risk-weighted USDC or WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Result is signed (EIP-712 typed data) by the payment-receiving address, returned as a sibling content block for offline verification.";
+  "Real-time risk-weighted USDC or WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Result is signed (EIP-712 typed data) by the payment-receiving address, returned as a sibling content block for offline verification. That same address is registered on-chain as an ERC-8004 agent identity (agent-card.json) and periodically publishes EAS attestations of past readings (Base mainnet) — a public track record independent of this server's uptime.";
 
 const TOOL_INPUT_SHAPE = {
   asset: z.enum(["USDC", "WETH"]).optional().describe("Which asset's lending yield to compare. Defaults to USDC."),

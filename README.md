@@ -52,7 +52,7 @@ Two independent ways to check a response wasn't tampered with or fabricated, nei
 
 - **Signed responses** — every REST/MCP response is signed (EIP-712 typed data) by the same `payTo` address the 402 payment requirement names. The struct (`asset`, `bestProtocol`, `weightedApyBps`, `gapBps`, `asOf`, `contentHash`) mirrors the on-chain EAS schema below, plus a `contentHash` (`keccak256` of the exact response body) binding it to the full response. REST: `X-Signal-Signature`/`X-Signal-Signer`/`X-Signal-Eip712-Payload` headers. MCP: a sibling content block. Verify with [viem's `verifyTypedData`](https://viem.sh/docs/actions/wallet/verifyTypedData) — or just call `getSignalVerified()` from the [`yieldsignal-client`](./client) package, which does both checks for you.
 - **On-chain attestations** ([EAS](https://attest.org), Base mainnet) — periodic, public, permanent records of "at time T, protocol X paid Y bps, Z ahead of the runner-up," independently checkable on [easscan.org](https://base.easscan.org) without trusting this server at all. Same attester address as the signed responses above. Published automatically whenever the signal changes materially (best protocol flips, or the gap moves ≥25bps) or gets stale (>12h since the last one) — see `src/attestation/autoAttest.ts` and `POST /internal/auto-attest` (cron-triggered, not on every paid call — that would have no cost ceiling). `npm run attest` still exists for manual, on-demand publishing. Full history at `GET /track-record` (or `/track-record.json`).
-- **Agent discovery** ([ERC-8004](https://eips.ethereum.org/EIPS/eip-8004), Base mainnet) — `GET /agent-card.json` is the registration file; once registered on-chain (`npm run register-agent`, `IdentityRegistry`), any buyer can leave verifiable feedback via the `ReputationRegistry` — addresses in `src/attestation/erc8004.ts`.
+- **Agent discovery** ([ERC-8004](https://eips.ethereum.org/EIPS/eip-8004), Base mainnet) — `GET /agent-card.json` is the registration file; agentId `59272` already minted on `IdentityRegistry`. Any REAL buyer (a wallet other than the service's own — the contract blocks owner/operator self-feedback) can leave verifiable feedback on `ReputationRegistry` by running `npm run give-feedback` — addresses/ABI in `src/attestation/erc8004.ts`.
 
 ## Architecture
 
@@ -69,7 +69,7 @@ Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but 
 - `src/cli/withdraw.ts` — sweeps accumulated USDC to the owner's personal wallet, manual `CONFIRM` required, never automatic.
 - `src/wallet/signerAccount.ts` — resolves the same receiver wallet with `signMessage`/`signTypedData`/`sendTransaction` exposed (`createX402Server` only exposes the address); used for response signing and EAS attestation.
 - `src/attestation/` — EAS schema definition and calldata encoding (pure, unit tested); `publishAttestation.ts` (shared tx-sending logic), `queryAttestations.ts` (EASScan GraphQL client + decoder), `autoAttest.ts` (pure decision logic + orchestration for the automatic trigger), `trackRecord.ts` (then-vs-now comparison), `erc8004.ts` (ERC-8004 registry addresses/ABI).
-- `src/cli/registerSchema.ts` / `src/cli/attestSignal.ts` / `src/cli/registerAgent.ts` — one-time schema registration, manual per-attestation publishing, and one-time ERC-8004 identity mint, same `CONFIRM` pattern as `withdraw.ts`.
+- `src/cli/registerSchema.ts` / `src/cli/attestSignal.ts` / `src/cli/registerAgent.ts` / `src/cli/giveFeedback.ts` — one-time schema registration, manual per-attestation publishing, one-time ERC-8004 identity mint, and buyer-side reputation feedback, same `CONFIRM` pattern as `withdraw.ts`. `giveFeedback.ts` is the one script that deliberately resolves a DIFFERENT wallet than `wallet/signerAccount.ts` — the contract rejects feedback from the service's own address.
 
 ## Local development
 
@@ -83,6 +83,7 @@ npm run withdraw          # sweep accumulated USDC — asks for typed "CONFIRM"
 npm run register-schema   # one-time EAS schema registration (mainnet, real gas) — asks for typed "CONFIRM"
 npm run attest             # publish one on-chain attestation of the current signal (mainnet, real gas) — asks for typed "CONFIRM"
 npm run register-agent    # one-time ERC-8004 identity mint (mainnet, real gas) — asks for typed "CONFIRM"
+npm run give-feedback     # a REAL buyer leaves feedback on ReputationRegistry (mainnet, real gas) — asks for typed "CONFIRM". Fails with "Self-feedback not allowed" if run from the service's own wallet.
 ```
 
 See `.env.example` for the required variables. Generate your own dedicated CDP project/credentials at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com/) — never reuse another project's.

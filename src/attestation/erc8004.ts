@@ -43,3 +43,49 @@ export const IDENTITY_REGISTRY_ABI = [
     ],
   },
 ] as const;
+
+// Fragmento mínimo — só `giveFeedback` (chamado por cli/giveFeedback.ts, NUNCA
+// por este servidor: `isAuthorizedOrOwner(msg.sender, agentId)` bloqueia
+// owner/operador) + o evento `NewFeedback` pra decodificar o recibo. Assinatura
+// conferida contra o source real (github.com/erc-8004/erc-8004-contracts,
+// contracts/ReputationRegistryUpgradeable.sol, branch master) — MESMO rigor
+// do IDENTITY_REGISTRY_ABI acima, mas SEM uma transação real já confirmada
+// pra validar contra (ninguém deixou feedback ainda). `value`/`valueDecimals`
+// é um número de ponto fixo sem escala fixa definida pelo contrato (ex.:
+// value=80, valueDecimals=0 → "80"); `tag1`/`tag2`/`endpoint`/`feedbackURI`
+// são strings livres, sem semântica imposta on-chain.
+export const REPUTATION_REGISTRY_ABI = [
+  {
+    type: "function",
+    name: "giveFeedback",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "agentId", type: "uint256" },
+      { name: "value", type: "int128" },
+      { name: "valueDecimals", type: "uint8" },
+      { name: "tag1", type: "string" },
+      { name: "tag2", type: "string" },
+      { name: "endpoint", type: "string" },
+      { name: "feedbackURI", type: "string" },
+      { name: "feedbackHash", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "NewFeedback",
+    inputs: [
+      { name: "agentId", type: "uint256", indexed: true },
+      { name: "clientAddress", type: "address", indexed: true },
+      { name: "feedbackIndex", type: "uint64", indexed: false },
+      { name: "value", type: "int128", indexed: false },
+      { name: "valueDecimals", type: "uint8", indexed: false },
+      { name: "indexedTag1", type: "string", indexed: true },
+      { name: "tag1", type: "string", indexed: false },
+      { name: "tag2", type: "string", indexed: false },
+      { name: "endpoint", type: "string", indexed: false },
+      { name: "feedbackURI", type: "string", indexed: false },
+      { name: "feedbackHash", type: "bytes32", indexed: false },
+    ],
+  },
+] as const;

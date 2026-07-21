@@ -1,7 +1,7 @@
 {
   "name": "yieldsignal-client",
   "version": "1.0.0",
-  "description": "Thin x402 client for YieldSignal — risk-weighted USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base.",
+  "description": "Thin x402 client for YieldSignal — risk-weighted USDC/WETH lending APY on Base plus ETH liquid staking APY on Ethereum mainnet.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

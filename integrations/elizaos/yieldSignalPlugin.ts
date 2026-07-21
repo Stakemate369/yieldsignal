@@ -11,7 +11,10 @@ import type { Action, ActionResult, HandlerCallback, IAgentRuntime, Memory, Plug
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { createYieldSignalClient, type YieldSignalAsset } from "yieldsignal-client";
 
-function parseAsset(text: string): YieldSignalAsset {
+export function parseAsset(text: string): YieldSignalAsset {
+  // Checa staking ANTES do fallback genérico "eth" — "ETH staking"/"stake ETH"
+  // bateria em /eth\b/ e seria classificado (errado) como WETH lending.
+  if (/stak|lido|rocket.?pool/i.test(text)) return "ETH_STAKING";
   return /weth|eth\b/i.test(text) ? "WETH" : "USDC";
 }
 
@@ -23,9 +26,9 @@ function parseAsset(text: string): YieldSignalAsset {
  */
 const getYieldSignalAction: Action = {
   name: "GET_YIELD_SIGNAL",
-  similes: ["CHECK_YIELD_SIGNAL", "BEST_LENDING_RATE", "USDC_WETH_APY"],
+  similes: ["CHECK_YIELD_SIGNAL", "BEST_LENDING_RATE", "USDC_WETH_APY", "ETH_STAKING_APY"],
   description:
-    "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Costs $0.01 USDC per call via x402.",
+    "Real-time risk-weighted yield signal: USDC/WETH lending APY on Base, or ETH staking APY on Ethereum mainnet. Costs $0.01 USDC per call via x402.",
   validate: async (_runtime: IAgentRuntime, _message: Memory): Promise<boolean> => true,
   handler: async (
     _runtime: IAgentRuntime,
@@ -40,7 +43,10 @@ const getYieldSignalAction: Action = {
       const yieldSignal = createYieldSignalClient(client);
       const signal = await yieldSignal.getSignal(asset);
 
-      const text = `Best ${signal.asset} lending rate on Base right now: ${signal.bestProtocol} (${signal.gapBps}bps ahead of the runner-up).`;
+      const text =
+        signal.asset === "ETH_STAKING"
+          ? `Best ETH staking rate right now: ${signal.bestProtocol} (${signal.gapBps}bps ahead of the runner-up).`
+          : `Best ${signal.asset} lending rate on Base right now: ${signal.bestProtocol} (${signal.gapBps}bps ahead of the runner-up).`;
       await callback?.({ text, content: signal });
       return { success: true, text, data: signal as unknown as Record<string, unknown> };
     } catch (err) {
@@ -59,6 +65,6 @@ const getYieldSignalAction: Action = {
 
 export const yieldSignalPlugin: Plugin = {
   name: "yieldsignal",
-  description: "Paid (x402) real-time lending yield signal for USDC/WETH on Base.",
+  description: "Paid (x402) real-time yield signal: USDC/WETH lending on Base, or ETH staking on Ethereum mainnet.",
   actions: [getYieldSignalAction],
 };

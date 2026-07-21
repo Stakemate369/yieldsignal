@@ -11,11 +11,11 @@
 import { ActionProvider, CreateAction } from "@coinbase/agentkit";
 import type { Network } from "@coinbase/agentkit";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
-import { createYieldSignalClient } from "yieldsignal-client";
+import { createYieldSignalClient, YIELD_SIGNAL_ASSETS } from "yieldsignal-client";
 import { z } from "zod";
 
 const GetYieldSignalSchema = z.object({
-  asset: z.enum(["USDC", "WETH"]).optional().default("USDC"),
+  asset: z.enum(YIELD_SIGNAL_ASSETS).optional().default("USDC"),
 });
 
 /**
@@ -34,7 +34,7 @@ class YieldSignalActionProvider extends ActionProvider {
   @CreateAction({
     name: "get_yield_signal",
     description:
-      "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Costs $0.01 USDC per call via x402.",
+      "Real-time risk-weighted yield signal: USDC/WETH lending APY on Base, or ETH_STAKING liquid staking APY on Ethereum mainnet. Costs $0.01 USDC per call via x402.",
     schema: GetYieldSignalSchema,
   })
   async getYieldSignal(args: z.infer<typeof GetYieldSignalSchema>): Promise<string> {

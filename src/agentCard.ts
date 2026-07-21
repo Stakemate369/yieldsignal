@@ -15,7 +15,7 @@ const AGENT_CARD = {
   type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   name: "YieldSignal",
   description:
-    "Real-time, risk-weighted USDC/WETH lending APY signal across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base — sold per-call via x402 ($0.01), REST + MCP. Every response signed (EIP-712 typed data) by the payment-receiving address; periodic on-chain attestations (EAS, Base mainnet) provide a public, permanent track record independent of this server's uptime.",
+    "Real-time, risk-weighted yield signals: USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base, plus ETH liquid staking APY across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH on Ethereum mainnet — sold per-call via x402 ($0.01), REST + MCP. Every response signed (EIP-712 typed data) by the payment-receiving address; periodic on-chain attestations (EAS, Base mainnet) provide a public, permanent track record independent of this server's uptime.",
   services: [
     { name: "web", endpoint: "https://yieldsignal.vercel.app/" },
     { name: "MCP", endpoint: "https://yieldsignal.vercel.app/mcp", version: "2025-06-18" },

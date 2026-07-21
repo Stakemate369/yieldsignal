@@ -2,7 +2,7 @@ import { BASE_MAINNET, BASE_ASSETS } from "../config/networks.js";
 import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
-import type { AssetId, RateReading } from "./types.js";
+import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -32,7 +32,7 @@ const POOL_DATA_PROVIDER_ABI = [
   },
 ] as const;
 
-async function readAaveSupplyApyUncached(asset: AssetId): Promise<RateReading> {
+async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateReading> {
   const data = await basePublicClient.readContract({
     address: BASE_MAINNET.aave.poolDataProvider,
     abi: POOL_DATA_PROVIDER_ABI,
@@ -58,11 +58,11 @@ async function readAaveSupplyApyUncached(asset: AssetId): Promise<RateReading> {
 // refletindo a hora real da leitura, não quando foi servido do cache.
 // Um cache por asset (não um cache só) — senão uma leitura de WETH serviria
 // do cache de USDC (ou vice-versa) até o TTL expirar.
-const cachedReaders: Record<AssetId, () => Promise<RateReading>> = {
+const cachedReaders: Record<LendingAssetId, () => Promise<RateReading>> = {
   USDC: cachedWithTtl(() => readAaveSupplyApyUncached("USDC"), CACHE_TTL_MS),
   WETH: cachedWithTtl(() => readAaveSupplyApyUncached("WETH"), CACHE_TTL_MS),
 };
 
-export function readAaveSupplyApy(asset: AssetId): Promise<RateReading> {
+export function readAaveSupplyApy(asset: LendingAssetId): Promise<RateReading> {
   return cachedReaders[asset]();
 }

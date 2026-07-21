@@ -2,10 +2,25 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import type { x402Client, x402HTTPClient } from "@x402/fetch";
 import { keccak256, toBytes, verifyTypedData } from "viem";
 
-export type YieldSignalAsset = "USDC" | "WETH";
+// Lista canônica — integrations/agentkit e integrations/goat importam daqui
+// pro schema Zod deles em vez de manter a própria cópia do literal (mesmo
+// achado/fix já aplicado do lado do servidor em market-data/types.ts#ASSET_IDS).
+export const YIELD_SIGNAL_ASSETS = ["USDC", "WETH", "ETH_STAKING"] as const;
+export type YieldSignalAsset = (typeof YIELD_SIGNAL_ASSETS)[number];
+
+// Espelha RESOURCE_PATHS do servidor (src/expressApp.ts) — precisa ser um
+// mapa explícito, não uma transformação do nome do asset: ETH_STAKING não
+// segue o padrão `${asset.toLowerCase()}-base-yield` que USDC/WETH usam por
+// coincidência (a rota real é /signal/eth-staking-yield, categoria diferente
+// de "lending na Base").
+const RESOURCE_PATHS: Record<YieldSignalAsset, string> = {
+  USDC: "usdc-base-yield",
+  WETH: "weth-base-yield",
+  ETH_STAKING: "eth-staking-yield",
+};
 
 export interface SignalRate {
-  protocol: "aave" | "morpho" | "compound" | "moonwell" | "euler" | "fluid";
+  protocol: "aave" | "morpho" | "compound" | "moonwell" | "euler" | "fluid" | "lido" | "rocket-pool" | "coinbase-wrapped-staked-eth" | "frax-ether" | "binance-staked-eth";
   apyBps: number;
   weightedApyBps: number;
   source: "onchain" | "api" | "defillama";
@@ -87,7 +102,7 @@ export function createYieldSignalClient(client: x402Client | x402HTTPClient, opt
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
   async function fetchRaw(asset: YieldSignalAsset): Promise<{ raw: string; res: Response }> {
-    const res = await fetchWithPayment(`${baseUrl}/signal/${asset.toLowerCase()}-base-yield`);
+    const res = await fetchWithPayment(`${baseUrl}/signal/${RESOURCE_PATHS[asset]}`);
     if (!res.ok) {
       throw new Error(`YieldSignal respondeu ${res.status}: ${await res.text()}`);
     }

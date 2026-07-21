@@ -5,11 +5,9 @@ import { withdrawNetworkFor } from "../config/networks.js";
 import { publishAttestation } from "../attestation/publishAttestation.js";
 import { collectRates } from "../signal/collectRates.js";
 import { computeSignal } from "../signal/computeSignal.js";
-import type { AssetId } from "../market-data/types.js";
+import { ASSET_IDS, type AssetId } from "../market-data/types.js";
 import { getSignerAccount } from "../wallet/signerAccount.js";
 import { logger } from "../notify/logger.js";
-
-const VALID_ASSETS: AssetId[] = ["USDC", "WETH"];
 
 /**
  * Publica UMA atestação on-chain (EAS, Base mainnet) do sinal calculado
@@ -33,8 +31,8 @@ async function main(): Promise<void> {
   }
 
   const requested = (process.argv[2] ?? "USDC").toUpperCase();
-  if (!VALID_ASSETS.includes(requested as AssetId)) {
-    throw new Error(`asset inválido: "${requested}" — use ${VALID_ASSETS.join(" ou ")}`);
+  if (!ASSET_IDS.includes(requested as AssetId)) {
+    throw new Error(`asset inválido: "${requested}" — use ${ASSET_IDS.join(" ou ")}`);
   }
   const asset = requested as AssetId;
 

@@ -10,16 +10,20 @@ import { z } from "zod";
 import { loadEnv } from "./config/env.js";
 import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
+import { ASSET_IDS } from "./market-data/types.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment } from "./notify/paymentLog.js";
 import type { SignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 
 const TOOL_DESCRIPTION =
-  "Real-time risk-weighted USDC or WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Result is signed (EIP-712 typed data) by the payment-receiving address, returned as a sibling content block for offline verification. That same address is registered on-chain as an ERC-8004 agent identity (agent-card.json) and periodically publishes EAS attestations of past readings (Base mainnet) — a public track record independent of this server's uptime.";
+  "Real-time risk-weighted yield signal. USDC/WETH: lending APY on Base (Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama). ETH_STAKING: liquid staking APY on Ethereum mainnet (Lido/Rocket Pool/Coinbase Wrapped Staked ETH/Frax Ether/Binance Staked ETH, all via DefiLlama) — a different chain and category from the lending signals, not a Base lending market. Source tagged per reading (never estimated). Result is signed (EIP-712 typed data) by the payment-receiving address, returned as a sibling content block for offline verification. That same address is registered on-chain as an ERC-8004 agent identity (agent-card.json) and periodically publishes EAS attestations of past readings (Base mainnet) — a public track record independent of this server's uptime.";
 
 const TOOL_INPUT_SHAPE = {
-  asset: z.enum(["USDC", "WETH"]).optional().describe("Which asset's lending yield to compare. Defaults to USDC."),
+  asset: z
+    .enum(ASSET_IDS)
+    .optional()
+    .describe("Which yield signal to fetch: USDC/WETH lending APY on Base, or ETH_STAKING liquid staking APY on Ethereum mainnet. Defaults to USDC."),
 };
 
 /**

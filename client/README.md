@@ -1,6 +1,6 @@
 # yieldsignal-client
 
-Thin [x402](https://x402.org) client for [YieldSignal](https://yieldsignal.vercel.app) — real-time, risk-weighted USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. $0.01 per call.
+Thin [x402](https://x402.org) client for [YieldSignal](https://yieldsignal.vercel.app) — real-time, risk-weighted USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base, plus ETH liquid staking APY across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH on Ethereum mainnet. $0.01 per call.
 
 This package only wraps the paid HTTP request (via [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch)). It does not provision a wallet or pick a signer for you — bring your own `x402Client`/`x402HTTPClient` with a funded Base wallet.
 
@@ -20,7 +20,9 @@ const client = new CdpX402Client(); // needs CDP_API_KEY_ID/SECRET/WALLET_SECRET
 const yieldSignal = createYieldSignalClient(client);
 
 const usdc = await yieldSignal.getSignal("USDC");
-const weth = await yieldSignal.getSignal(); // defaults to USDC
+const weth = await yieldSignal.getSignal("WETH");
+const ethStaking = await yieldSignal.getSignal("ETH_STAKING");
+const defaultsToUsdc = await yieldSignal.getSignal(); // defaults to USDC
 
 console.log(usdc.bestProtocol, usdc.gapBps, usdc.rates);
 ```

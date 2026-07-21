@@ -12,6 +12,10 @@ import { X402_RECEIVER_ACCOUNT_NAME } from "./config/networks.js";
 import { assertWalletAddress } from "./wallet/walletLock.js";
 import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
+import { decideMove } from "./signal/decideMove.js";
+import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
+import { computeAccuracyScore } from "./attestation/accuracyScore.js";
+import { GUARANTEE_TERMS } from "./guarantee/terms.js";
 import type { AssetId } from "./market-data/types.js";
 import { createMcpRequestHandler } from "./mcp.js";
 import { consumeFreeTrial } from "./freeTrial.js";
@@ -31,15 +35,32 @@ import { AGENT_CARD_JSON } from "./agentCard.js";
 export const RESOURCE_PATHS: Record<AssetId, string> = {
   USDC: "/signal/usdc-base-yield",
   WETH: "/signal/weth-base-yield",
+  ETH_STAKING: "/signal/eth-staking-yield",
 };
 
 // Mantido pra quem ainda referencia o path original diretamente (scripts de
 // teste manual) — sempre igual a RESOURCE_PATHS.USDC, nunca diverge.
 export const RESOURCE_PATH = RESOURCE_PATHS.USDC;
 
+// CAMADA 1 (premium): rotas de DECISÃO — pagas e assinadas como os sinais,
+// mas vendem a recomendação MOVE/HOLD (com break-even e confiança), não o
+// dado bruto. Um path por ativo, separado das rotas de sinal acima.
+export const DECISION_PATHS: Record<AssetId, string> = {
+  USDC: "/decision/usdc-base-yield",
+  WETH: "/decision/weth-base-yield",
+  ETH_STAKING: "/decision/eth-staking-yield",
+};
+
+const DECISION_DESCRIPTIONS: Record<AssetId, string> = {
+  USDC: "Buyer-side MOVE/HOLD decision for USDC lending on Base: given your current position (?position=), size (?amountUsd=), move cost (?moveCostUsd=) and horizon (?horizonDays=), returns whether moving to the best risk-adjusted protocol pays for itself — with expected net gain, break-even days and a confidence tier. Deterministic from the underlying signal (which is EIP-712 signed in the response headers, re-verifiable). Sells the decision, not the raw datapoint.",
+  WETH: "Buyer-side MOVE/HOLD decision for WETH lending on Base — same contract as the USDC decision route, for WETH.",
+  ETH_STAKING: "Buyer-side MOVE/HOLD decision for ETH liquid staking (Ethereum mainnet) — same contract as the lending decision routes, for ETH staking.",
+};
+
 const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
   USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
   WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
+  ETH_STAKING: "Real-time risk-weighted ETH liquid staking APY on Ethereum mainnet: Lido/Rocket Pool/Coinbase Wrapped Staked ETH/Frax Ether/Binance Staked ETH, all via DefiLlama (source tagged per reading, never estimated). Different chain and category from the USDC/WETH lending signals above — this is staking yield, not a Base lending market. Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
 };
 
 /**
@@ -57,16 +78,30 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     // cli/withdraw.ts, que resolve a MESMA conta por nome de forma
     // independente, sempre bata com o endereço que este servidor usa.
     payToConfig: { type: "eoa", accountName: X402_RECEIVER_ACCOUNT_NAME },
-    routes: {
-      [`GET ${RESOURCE_PATHS.USDC}`]: { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS.USDC },
-      [`GET ${RESOURCE_PATHS.WETH}`]: { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS.WETH },
-    },
+    // Construído a partir de RESOURCE_PATHS/ROUTE_DESCRIPTIONS (mesma fonte
+    // que o loop de registro dos handlers GET mais abaixo) em vez de listar
+    // cada asset à mão aqui — duas cópias hand-kept-in-sync é exatamente o
+    // tipo de coisa que dá pra esquecer de atualizar ao somar um asset novo.
+    routes: Object.fromEntries([
+      ...(Object.keys(RESOURCE_PATHS) as AssetId[]).map((asset) => [
+        `GET ${RESOURCE_PATHS[asset]}`,
+        { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS[asset] },
+      ]),
+      // Rotas de decisão (Camada 1) — mesmo preço-base por enquanto; preço
+      // premium por decisão é uma alavanca de negócio (a decisão vale mais que
+      // o dado), deixada como config futura pra não embutir uma decisão de
+      // pricing aqui.
+      ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
+        `GET ${DECISION_PATHS[asset]}`,
+        { price: env.PRICE_USD, description: DECISION_DESCRIPTIONS[asset] },
+      ]),
+    ]),
   });
 
   // Trava o endereço receptor ANTES de aceitar qualquer request real — lição
   // aplicada de forma proativa (ver wallet/walletLock.ts). payToEvmAddress só
   // é undefined se nenhuma rota EIP-155 foi provisionada, o que não é o caso
-  // aqui (redes default incluem eip155:8453/84532 pras duas rotas).
+  // aqui (redes default incluem eip155:8453/84532 pras rotas).
   if (!server.payToEvmAddress) {
     throw new Error("createX402Server não provisionou uma carteira EVM — não é seguro aceitar pagamentos assim.");
   }
@@ -159,6 +194,32 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     res.type("html").send(TRACK_RECORD_PAGE_HTML);
   });
 
+  // CAMADA 2: score de acurácia legível por máquina — GRÁTIS de propósito. É
+  // o sinal de confiança que faz um robô decidir pagar pelo produto; quanto
+  // mais fácil de consultar, mais adoção. Derivado 1:1 do mesmo track record
+  // (fonte = EAS, verificável), então não é auto-declarado. EAS_SCHEMA_UID
+  // vazio degrada pra score vazio (nada atestado ainda), nunca 5xx.
+  app.get("/accuracy.json", async (_req, res) => {
+    if (!env.EAS_SCHEMA_UID) {
+      res.json({ schemaUid: null, attester: signer.address, score: computeAccuracyScore([]) });
+      return;
+    }
+    try {
+      const entries = await buildTrackRecord({ schemaUid: env.EAS_SCHEMA_UID as `0x${string}`, attester: signer.address });
+      res.json({ schemaUid: env.EAS_SCHEMA_UID, attester: signer.address, score: computeAccuracyScore(entries) });
+    } catch (err) {
+      logger.error({ err }, "falha calculando accuracy score");
+      res.status(503).json({ error: "falha temporária consultando o histórico — tente de novo em instantes" });
+    }
+  });
+
+  // CAMADA 3: termos da garantia econômica — GRÁTIS, read-only, e HONESTO
+  // sobre o status (motor pronto, escrow ainda não deployado). Nenhuma
+  // promessa de payout ativa até o bond ser fundeado (ver src/guarantee/).
+  app.get("/guarantee/terms.json", (_req, res) => {
+    res.json(GUARANTEE_TERMS);
+  });
+
   // Registration file ERC-8004 (ver attestation/erc8004.ts) — estático até o
   // registro on-chain acontecer (npm run register-agent), quando o agentId
   // real é adicionado ao array `registrations` (ver comentário em agentCard.ts).
@@ -203,11 +264,45 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     }
   }
 
+  // CAMADA 1: responde a DECISÃO MOVE/HOLD. Assina o SINAL embutido (mesmo
+  // struct EIP-712 dos endpoints de sinal) — como a decisão é uma função
+  // determinística do sinal + os query params, o comprador re-executa
+  // decideMove localmente com o sinal assinado e obtém a MESMA decisão; então
+  // assinar o sinal já torna a decisão verificável, sem struct novo.
+  async function respondWithDecision(res: express.Response, asset: AssetId, query: Record<string, unknown>): Promise<void> {
+    const parsed = parseDecisionQuery(query);
+    if (!parsed.ok) {
+      // Erro de parâmetro do comprador — 400, não 5xx. O pagamento x402 já
+      // liquidou nesse ponto; um input inválido é responsabilidade do chamador,
+      // mas a mensagem é clara pra ele corrigir e chamar de novo.
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    try {
+      const readings = await collectRates(asset);
+      const decision = decideMove(readings, parsed.input);
+      // Assina o sinal embutido (não o corpo inteiro da decisão) — o corpo
+      // servido continua sendo a decisão completa; a assinatura cobre o dado
+      // de mercado do qual a decisão deriva deterministicamente.
+      const rawSignal = JSON.stringify(decision.signal);
+      const signed = await signPayload(signer, rawSignal, decision.signal);
+      if (signed) {
+        res.setHeader("X-Signal-Signature", signed.signature);
+        res.setHeader("X-Signal-Signer", signed.signer);
+        res.setHeader("X-Signal-Eip712-Payload", JSON.stringify(eip712ForTransport(signed.eip712)));
+      }
+      res.type("application/json").send(JSON.stringify(decision));
+    } catch (err) {
+      logger.error({ err, asset }, "falha gerando decisão");
+      res.status(503).json({ error: "falha temporária lendo taxas — tente de novo em instantes" });
+    }
+  }
+
   // Fato de uso — cobre TAMBÉM as chamadas grátis, que o hook de settlement
   // (acima) nunca vê. É essa linha, não a de pagamento, que responde "isso
   // está sendo usado?" antes mesmo de dar receita.
-  function logUsage(asset: AssetId, freeTrial: boolean): void {
-    logger.info({ channel: "rest", asset, freeTrial }, "sinal servido");
+  function logUsage(asset: AssetId, freeTrial: boolean, channel: "rest" | "rest-decision" = "rest"): void {
+    logger.info({ channel, asset, freeTrial }, "sinal servido");
   }
 
   for (const asset of Object.keys(RESOURCE_PATHS) as AssetId[]) {
@@ -238,6 +333,34 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       async (_req, res) => {
         logUsage(asset, false);
         await respondWithSignal(res, asset);
+      },
+    );
+  }
+
+  // Rotas de DECISÃO (Camada 1) — mesmo padrão free-trial + pagamento das
+  // rotas de sinal, mas servindo a recomendação MOVE/HOLD. Query params
+  // (position/amountUsd/moveCostUsd/horizonDays) são lidos DENTRO do handler.
+  for (const asset of Object.keys(DECISION_PATHS) as AssetId[]) {
+    app.get(
+      DECISION_PATHS[asset],
+      (req, res, next) => {
+        if (req.query.trial !== "1") {
+          next();
+          return;
+        }
+        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
+        if (consumeFreeTrial(ip)) {
+          res.setHeader("X-Free-Trial", "true");
+          logUsage(asset, true, "rest-decision");
+          void respondWithDecision(res, asset, req.query as Record<string, unknown>);
+          return;
+        }
+        next();
+      },
+      paymentMiddlewareFromHTTPServer(server),
+      async (req, res) => {
+        logUsage(asset, false, "rest-decision");
+        await respondWithDecision(res, asset, req.query as Record<string, unknown>);
       },
     );
   }

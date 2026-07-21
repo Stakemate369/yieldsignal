@@ -2,7 +2,7 @@ import { BASE_ASSETS } from "../config/networks.js";
 import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
-import type { AssetId, RateReading } from "./types.js";
+import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -27,7 +27,7 @@ const COMET_ABI = [
   },
 ] as const;
 
-async function readCompoundSupplyApyUncached(asset: AssetId): Promise<RateReading> {
+async function readCompoundSupplyApyUncached(asset: LendingAssetId): Promise<RateReading> {
   // Diferente da Aave (um pool só, asset como parâmetro), cada asset no
   // Compound V3 é um Comet PROXY separado — endereço vem de BASE_ASSETS.
   const comet = BASE_ASSETS[asset].compoundComet;
@@ -59,11 +59,11 @@ async function readCompoundSupplyApyUncached(asset: AssetId): Promise<RateReadin
 
 // TTL curto (30s) — mesmo motivo do cache em aave.ts. Um cache por asset,
 // mesmo raciocínio de isolamento já aplicado lá.
-const cachedReaders: Record<AssetId, () => Promise<RateReading>> = {
+const cachedReaders: Record<LendingAssetId, () => Promise<RateReading>> = {
   USDC: cachedWithTtl(() => readCompoundSupplyApyUncached("USDC"), CACHE_TTL_MS),
   WETH: cachedWithTtl(() => readCompoundSupplyApyUncached("WETH"), CACHE_TTL_MS),
 };
 
-export function readCompoundSupplyApy(asset: AssetId): Promise<RateReading> {
+export function readCompoundSupplyApy(asset: LendingAssetId): Promise<RateReading> {
   return cachedReaders[asset]();
 }

@@ -1,6 +1,6 @@
 import { base, baseSepolia } from "viem/chains";
 import type { Chain } from "viem";
-import type { AssetId } from "../market-data/types.js";
+import type { LendingAssetId } from "../market-data/types.js";
 
 /**
  * O produto vendido é sempre sobre taxas reais da Base mainnet — não faz
@@ -69,7 +69,7 @@ export const MORPHO_USDC_VAULT: `0x${string}` = "0xeE8F4eC5672F09119b96Ab6fB59C2
  *   Morpho (chainId 8453, assetSymbol WETH) — "Moonwell Flagship ETH".
  */
 export const BASE_ASSETS: Record<
-  AssetId,
+  LendingAssetId,
   { token: `0x${string}`; compoundComet: `0x${string}`; morphoVault: `0x${string}` }
 > = {
   USDC: {

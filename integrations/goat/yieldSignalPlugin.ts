@@ -15,11 +15,11 @@
 import { PluginBase, Tool, createToolParameters } from "@goat-sdk/core";
 import type { Chain, WalletClientBase } from "@goat-sdk/core";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
-import { createYieldSignalClient } from "yieldsignal-client";
+import { createYieldSignalClient, YIELD_SIGNAL_ASSETS } from "yieldsignal-client";
 import { z } from "zod";
 
 class GetYieldSignalParameters extends createToolParameters(
-  z.object({ asset: z.enum(["USDC", "WETH"]).optional().default("USDC") }),
+  z.object({ asset: z.enum(YIELD_SIGNAL_ASSETS).optional().default("USDC") }),
 ) {}
 
 /**
@@ -33,7 +33,7 @@ class YieldSignalToolset {
   @Tool({
     name: "get_yield_signal",
     description:
-      "Real-time risk-weighted USDC or WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base. Costs $0.01 USDC per call via x402.",
+      "Real-time risk-weighted yield signal: USDC/WETH lending APY on Base, or ETH_STAKING liquid staking APY on Ethereum mainnet. Costs $0.01 USDC per call via x402.",
   })
   async getYieldSignal(parameters: GetYieldSignalParameters): Promise<string> {
     const client = new CdpX402Client();

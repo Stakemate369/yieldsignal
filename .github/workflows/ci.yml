@@ -14,6 +14,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # lockfile é gerado com npm 11 localmente; o npm 10 do runner não o entende
+      - run: npm install -g npm@11
       - run: npm ci
       - run: npm ci --prefix client && npm run build --prefix client
       - run: npx tsc --noEmit -p tsconfig.json

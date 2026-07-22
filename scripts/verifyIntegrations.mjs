@@ -25,7 +25,7 @@ async function verifyAgentKit() {
   // ver CreateAction em actionDecorator.js) — não é "get_yield_signal" puro,
   // suposição inicial errada que só o teste contra o dist real revelou.
   assert.equal(action.name, "YieldSignalActionProvider_get_yield_signal");
-  assert.match(action.description, /USDC or WETH lending APY/);
+  assert.match(action.description, /USDC\/WETH lending APY/);
   assert.equal(action.schema.safeParse({}).success, true, "schema deve aceitar asset omitido (default USDC)");
   assert.equal(action.schema.safeParse({ asset: "WETH" }).success, true);
   assert.equal(action.schema.safeParse({ asset: "DAI" }).success, false, "schema deve rejeitar asset fora do enum");
@@ -41,7 +41,7 @@ async function verifyGoat() {
   const tools = await plugin.getTools({});
   assert.equal(tools.length, 1, "GOAT: esperava exatamente 1 tool registrada");
   assert.equal(tools[0].name, "get_yield_signal");
-  assert.match(tools[0].description, /USDC or WETH lending APY/);
+  assert.match(tools[0].description, /USDC\/WETH lending APY/);
   console.log("✓ GOAT plugin: registro de tool, supportsChain e parâmetros (createToolParameters) corretos (dist real)");
 }
 

@@ -375,5 +375,53 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     );
   }
 
+  // Aliases curtos → caminho canônico. Um comprador (humano ou agente) que
+  // adivinha o óbvio `/decision/usdc` em vez de `/decision/usdc-base-yield`
+  // recebia um 404 mudo; agora é redirecionado (308 preserva método e query)
+  // pra rota canônica, onde o desafio x402 dispara normalmente e o pagamento
+  // liquida contra o path certo. São paths distintos dos canônicos, então não
+  // há shadow do middleware de pagamento registrado acima.
+  const SHORT_ALIASES: Record<string, string> = {
+    "/signal/usdc": RESOURCE_PATHS.USDC,
+    "/signal/weth": RESOURCE_PATHS.WETH,
+    "/signal/eth-staking": RESOURCE_PATHS.ETH_STAKING,
+    "/decision/usdc": DECISION_PATHS.USDC,
+    "/decision/weth": DECISION_PATHS.WETH,
+    "/decision/eth-staking": DECISION_PATHS.ETH_STAKING,
+  };
+  for (const [alias, canonical] of Object.entries(SHORT_ALIASES)) {
+    app.get(alias, (req, res) => {
+      const qIndex = req.originalUrl.indexOf("?");
+      const query = qIndex >= 0 ? req.originalUrl.slice(qIndex) : "";
+      res.redirect(308, canonical + query);
+    });
+  }
+
+  // 404 legível por máquina — em vez do "Cannot GET /x" cru do Express, uma
+  // rota inexistente devolve JSON com o mapa de endpoints válidos. Fecha o
+  // "falso 404" de vez: quem erra o caminho recebe o guia pra se autocorrigir,
+  // não um beco sem saída. Registrado por último, depois de todas as rotas
+  // reais e dos aliases, pra só pegar o que sobrou.
+  app.use((req, res) => {
+    res.status(404).json({
+      error: "route not found",
+      path: req.path,
+      endpoints: {
+        signal: Object.values(RESOURCE_PATHS),
+        decision: Object.values(DECISION_PATHS),
+        free: [
+          "/accuracy.json",
+          "/track-record.json",
+          "/guarantee/terms.json",
+          "/agent-card.json",
+          "/health",
+        ],
+        mcp: "/mcp",
+        aliases:
+          "short forms like /signal/usdc and /decision/usdc redirect (308) to the canonical *-base-yield paths",
+      },
+    });
+  });
+
   return { app, payToEvmAddress: server.payToEvmAddress };
 }

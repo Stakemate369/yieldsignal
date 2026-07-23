@@ -8,5 +8,8 @@ state/*.json
 !state/.gitkeep
 cdp_api_key*.json
 cdp_wallet_secret.txt
+npm_recovery_codes.txt
+*recovery_codes*
+*.secret
 
 .vercel

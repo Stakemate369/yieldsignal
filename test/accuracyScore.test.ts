@@ -8,7 +8,13 @@ function entry(
   bestProtocol: ProtocolId,
   stillBest: boolean | null,
   gapBps = 30,
+  // default: 0 bps de regret se ainda é o melhor, 50 bps (fora da tolerância)
+  // se caiu, null se o mercado está ilegível — sobrescrevível pra testar a
+  // métrica justa (ex.: um "não-melhor" ainda DENTRO da tolerância).
+  regretBps: number | null = stillBest === null ? null : stillBest ? 0 : 50,
 ): TrackRecordEntry {
+  const currentWeightedApyBps = stillBest === null ? null : 480;
+  const currentBestWeightedApyBps = regretBps === null ? null : (currentWeightedApyBps ?? 480) + regretBps;
   return {
     uid: "0xabc" as `0x${string}`,
     asset,
@@ -16,8 +22,10 @@ function entry(
     bestProtocolAtAttestation: bestProtocol,
     weightedApyBpsAtAttestation: 500,
     gapBpsAtAttestation: gapBps,
-    currentWeightedApyBps: stillBest === null ? null : 480,
+    currentWeightedApyBps,
     currentBestProtocol: stillBest === null ? null : stillBest ? bestProtocol : "compound",
+    currentBestWeightedApyBps,
+    regretBps,
     stillBest,
     easscanUrl: "https://base.easscan.org/attestation/view/0xabc",
   };
@@ -92,5 +100,53 @@ describe("computeAccuracyScore", () => {
       entry("USDC", "aave", null, 60),
     ]);
     expect(s.avgGapBpsAtAttestation).toBe(40); // (20+40+60)/3
+  });
+
+  it("métrica JUSTA: um 'não-melhor' DENTRO da tolerância conta como acerto, ao contrário do stillBest binário", () => {
+    const s = computeAccuracyScore([
+      entry("USDC", "aave", true, 30, 0), // é o melhor
+      entry("USDC", "morpho", false, 30, 10), // 10bps atrás — dentro da tolerância (25)
+      entry("USDC", "compound", false, 30, 60), // 60bps atrás — fora
+    ]);
+    // stillBest cru pune os dois "false": hitRate 1/3
+    expect(s.hitRate).toBeCloseTo(1 / 3, 5);
+    // métrica justa: 2 dos 3 estão a <=25bps do líder
+    expect(s.toleranceBps).toBe(25);
+    expect(s.regretScored).toBe(3);
+    expect(s.withinTolerance).toBe(2);
+    expect(s.withinToleranceRate).toBeCloseTo(2 / 3, 5);
+    expect(s.avgRegretBps).toBe(23); // round((0+10+60)/3)
+  });
+
+  it("regret indeterminado (regretBps null) sai do denominador de withinTolerance", () => {
+    const s = computeAccuracyScore([
+      entry("USDC", "aave", true, 30, 0),
+      entry("USDC", "aave", null, 30, null), // mercado ilegível: regret null
+    ]);
+    expect(s.regretScored).toBe(1); // só a apurável
+    expect(s.withinTolerance).toBe(1);
+    expect(s.withinToleranceRate).toBe(1);
+    expect(s.avgRegretBps).toBe(0);
+  });
+
+  it("sem nenhuma entrada apurável: métricas de regret são null/0", () => {
+    const s = computeAccuracyScore([entry("USDC", "aave", null, 30, null)]);
+    expect(s.regretScored).toBe(0);
+    expect(s.withinTolerance).toBe(0);
+    expect(s.withinToleranceRate).toBeNull();
+    expect(s.avgRegretBps).toBeNull();
+  });
+
+  it("breakdown por asset carrega as métricas de regret independentes", () => {
+    const s = computeAccuracyScore([
+      entry("USDC", "aave", false, 30, 10), // dentro
+      entry("USDC", "aave", false, 30, 40), // fora
+      entry("WETH", "morpho", true, 30, 0),
+    ]);
+    const usdc = s.perAsset.find((p) => p.asset === "USDC");
+    const weth = s.perAsset.find((p) => p.asset === "WETH");
+    expect(usdc).toMatchObject({ regretScored: 2, withinTolerance: 1, avgRegretBps: 25 });
+    expect(usdc?.withinToleranceRate).toBeCloseTo(0.5, 5);
+    expect(weth).toMatchObject({ regretScored: 1, withinTolerance: 1, avgRegretBps: 0, withinToleranceRate: 1 });
   });
 });

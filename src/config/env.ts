@@ -48,6 +48,20 @@ const schema = z.object({
     .string()
     .regex(/^\$\d+(\.\d{1,6})?$/, 'PRICE_USD precisa seguir o formato "$0.01" (cifrão + valor decimal)')
     .default("$0.01"),
+  // Preço das rotas de DECISÃO (Camada 1 premium) — a decisão MOVE/HOLD vale
+  // mais que o dado bruto, então cobra mais que PRICE_USD por padrão. Mesmo
+  // formato "Money" do x402. Aplicado tanto nas rotas REST /decision/* quanto
+  // na tool MCP get_yield_decision.
+  DECISION_PRICE_USD: z
+    .string()
+    .regex(/^\$\d+(\.\d{1,6})?$/, 'DECISION_PRICE_USD precisa seguir o formato "$0.05" (cifrão + valor decimal)')
+    .default("$0.05"),
+  // Alerta operacional opcional pro dono (mesmo padrão do YieldPilot). Ambos
+  // vazios = notificação desligada (no-op silencioso, ver notify/telegram.ts);
+  // o resto do produto funciona normalmente sem isso. Usado hoje pra avisar
+  // quando o auto-attest falha (ex.: saldo de gas abaixo do piso).
+  TELEGRAM_BOT_TOKEN: z.string().default(""),
+  TELEGRAM_CHAT_ID: z.string().default(""),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 

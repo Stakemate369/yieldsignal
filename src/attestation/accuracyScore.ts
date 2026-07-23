@@ -18,11 +18,27 @@ import type { TrackRecordEntry } from "./trackRecord.js";
  * e o score diz isso explicitamente no campo `basis`.
  */
 
+/**
+ * Tolerância (bps) para a métrica JUSTA de acurácia: um sinal que apontou um
+ * protocolo hoje até este tanto atrás do líder atual ainda conta como acerto.
+ * 25 bps espelha o GAP_CHANGE_THRESHOLD_BPS do auto-attest — abaixo disso o
+ * mercado é considerado praticamente empatado.
+ */
+export const ACCURACY_TOLERANCE_BPS = 25;
+
 export interface AccuracyBreakdown {
   asset: AssetId;
   scored: number;
   stillBest: number;
   hitRate: number | null;
+  /** Entradas com regret apurável neste asset (denominador de withinTolerance/avgRegret). */
+  regretScored: number;
+  /** Quantas ficaram dentro da tolerância (regret <= ACCURACY_TOLERANCE_BPS). */
+  withinTolerance: number;
+  /** withinTolerance / regretScored. null se nada apurável. */
+  withinToleranceRate: number | null;
+  /** Regret médio (bps) neste asset. null se nada apurável. */
+  avgRegretBps: number | null;
 }
 
 export interface AccuracyScore {
@@ -36,11 +52,26 @@ export interface AccuracyScore {
   indeterminate: number;
   /** stillBest / scored. `null` se nada foi apurável (sem base pra afirmar acurácia). */
   hitRate: number | null;
+  /** Tolerância (bps) usada pela métrica justa — exposta pra o consumidor máquina saber o critério. */
+  toleranceBps: number;
+  /** Atestações com regret apurável (líder atual E protocolo atestado legíveis agora) — denominador de withinTolerance/avgRegret. */
+  regretScored: number;
+  /** Quantas ficaram DENTRO da tolerância (regret <= toleranceBps) — a métrica JUSTA, mais informativa que o stillBest binário. */
+  withinTolerance: number;
+  /** withinTolerance / regretScored. null se nada apurável. A taxa que responde "com que frequência o sinal aponta o líder OU quase". */
+  withinToleranceRate: number | null;
+  /** Regret médio (bps) atrás do líder atual — quão custoso, na média, foi seguir o sinal em vez do #1 de hoje. null se nada apurável. */
+  avgRegretBps: number | null;
   /** Gap médio (bps) no momento da atestação — calibra a confiança: gaps maiores => chamadas mais fáceis de acertar. */
   avgGapBpsAtAttestation: number | null;
   perAsset: AccuracyBreakdown[];
   /** Momento em que este score foi calculado. */
   computedAt: string;
+}
+
+/** Média inteira de uma lista (bps), ou null se vazia. */
+function avgBps(values: number[]): number | null {
+  return values.length > 0 ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null;
 }
 
 /**
@@ -57,27 +88,55 @@ export function computeAccuracyScore(entries: TrackRecordEntry[]): AccuracyScore
   const stillBest = determinate.filter((e) => e.stillBest === true).length;
   const hitRate = scored > 0 ? stillBest / scored : null;
 
-  const gaps = entries.map((e) => e.gapBpsAtAttestation).filter((g) => Number.isFinite(g));
-  const avgGapBpsAtAttestation = gaps.length > 0 ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : null;
+  // Métrica JUSTA: regret é apurável de forma independente do stillBest (pode
+  // haver regret sem stillBest e vice-versa se só o protocolo atestado ficou
+  // ilegível). Denominador próprio = entradas com regretBps não-nulo.
+  const regretEntries = entries.filter((e) => e.regretBps !== null);
+  const regretScored = regretEntries.length;
+  const withinTolerance = regretEntries.filter((e) => (e.regretBps as number) <= ACCURACY_TOLERANCE_BPS).length;
+  const withinToleranceRate = regretScored > 0 ? withinTolerance / regretScored : null;
+  const avgRegretBps = avgBps(regretEntries.map((e) => e.regretBps as number));
 
-  // Agrupa por asset preservando ordem de primeira aparição.
-  const byAsset = new Map<AssetId, { scored: number; stillBest: number }>();
+  const avgGapBpsAtAttestation = avgBps(entries.map((e) => e.gapBpsAtAttestation).filter((g) => Number.isFinite(g)));
+
+  // Agrupa por asset preservando ordem de primeira aparição. Acumula tanto o
+  // stillBest (denominador determinate) quanto o regret (denominador próprio).
+  interface AssetAcc {
+    scored: number;
+    stillBest: number;
+    regretScored: number;
+    withinTolerance: number;
+    regretSum: number;
+  }
+  const byAsset = new Map<AssetId, AssetAcc>();
+  const accFor = (asset: AssetId): AssetAcc => {
+    const acc = byAsset.get(asset) ?? { scored: 0, stillBest: 0, regretScored: 0, withinTolerance: 0, regretSum: 0 };
+    byAsset.set(asset, acc);
+    return acc;
+  };
   for (const e of determinate) {
-    const acc = byAsset.get(e.asset) ?? { scored: 0, stillBest: 0 };
+    const acc = accFor(e.asset);
     acc.scored += 1;
     if (e.stillBest === true) acc.stillBest += 1;
-    byAsset.set(e.asset, acc);
   }
-  // Garante que assets só-indeterminados também apareçam (scored 0, hitRate null).
-  for (const e of entries) {
-    if (!byAsset.has(e.asset)) byAsset.set(e.asset, { scored: 0, stillBest: 0 });
+  for (const e of regretEntries) {
+    const acc = accFor(e.asset);
+    acc.regretScored += 1;
+    acc.regretSum += e.regretBps as number;
+    if ((e.regretBps as number) <= ACCURACY_TOLERANCE_BPS) acc.withinTolerance += 1;
   }
+  // Garante que assets sem nenhuma entrada apurável também apareçam (tudo 0/null).
+  for (const e of entries) accFor(e.asset);
 
   const perAsset: AccuracyBreakdown[] = Array.from(byAsset.entries()).map(([asset, v]) => ({
     asset,
     scored: v.scored,
     stillBest: v.stillBest,
     hitRate: v.scored > 0 ? v.stillBest / v.scored : null,
+    regretScored: v.regretScored,
+    withinTolerance: v.withinTolerance,
+    withinToleranceRate: v.regretScored > 0 ? v.withinTolerance / v.regretScored : null,
+    avgRegretBps: v.regretScored > 0 ? Math.round(v.regretSum / v.regretScored) : null,
   }));
 
   return {
@@ -86,6 +145,11 @@ export function computeAccuracyScore(entries: TrackRecordEntry[]): AccuracyScore
     stillBest,
     indeterminate,
     hitRate,
+    toleranceBps: ACCURACY_TOLERANCE_BPS,
+    regretScored,
+    withinTolerance,
+    withinToleranceRate,
+    avgRegretBps,
     avgGapBpsAtAttestation,
     perAsset,
     computedAt: new Date().toISOString(),

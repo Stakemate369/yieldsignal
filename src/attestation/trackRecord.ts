@@ -14,6 +14,16 @@ export interface TrackRecordEntry {
   /** null só se TODAS as fontes de taxa falharem agora (ver collectRates) — nunca um valor estimado. */
   currentWeightedApyBps: number | null;
   currentBestProtocol: ProtocolId | null;
+  /** APY ponderado (bps) do MELHOR protocolo AGORA — base pra medir o regret. null se mercado ilegível agora. */
+  currentBestWeightedApyBps: number | null;
+  /**
+   * Quantos bps ATRÁS do líder atual o protocolo atestado está HOJE (ajustado
+   * por risco). 0 se ainda é o melhor. É a métrica JUSTA: um sinal que apontou
+   * um protocolo hoje 5bps atrás do #1 não errou de verdade, mas `stillBest`
+   * (que exige o #1 exato) o marcaria como erro. null se o mercado — ou o
+   * protocolo atestado especificamente — não deu pra ler agora.
+   */
+  regretBps: number | null;
   /** O protocolo atestado então ainda é o melhor hoje? null se não deu pra ler o mercado agora. */
   stillBest: boolean | null;
   easscanUrl: string;
@@ -53,6 +63,18 @@ export async function buildTrackRecord(params: {
   return attestations.map((a) => {
     const current = currentSignals.get(a.asset) ?? null;
     const currentRate = current?.rates.find((r) => r.protocol === a.bestProtocol) ?? null;
+    // Melhor ponderado AGORA — `rates` já vem ordenado desc por weightedApyBps
+    // (ver computeSignal), mas resolvo por bestProtocol pra não depender da ordem.
+    const currentBestRate = current?.rates.find((r) => r.protocol === current.bestProtocol) ?? null;
+    const currentBestWeightedApyBps = currentBestRate?.weightedApyBps ?? null;
+    // regret: bps que o protocolo atestado perde pro líder atual hoje. Só é
+    // apurável se deu pra ler TANTO o líder atual QUANTO o protocolo atestado
+    // agora. Nunca negativo (se por arredondamento o atestado aparecer à frente,
+    // trava em 0 — "estar à frente" não é regret).
+    const regretBps =
+      currentBestWeightedApyBps !== null && currentRate !== null
+        ? Math.max(0, currentBestWeightedApyBps - currentRate.weightedApyBps)
+        : null;
     return {
       uid: a.uid,
       asset: a.asset,
@@ -62,6 +84,8 @@ export async function buildTrackRecord(params: {
       gapBpsAtAttestation: a.gapBps,
       currentWeightedApyBps: currentRate?.weightedApyBps ?? null,
       currentBestProtocol: current?.bestProtocol ?? null,
+      currentBestWeightedApyBps,
+      regretBps,
       stillBest: current ? current.bestProtocol === a.bestProtocol : null,
       easscanUrl: `https://base.easscan.org/attestation/view/${a.uid}`,
     };

@@ -22,6 +22,7 @@ import { consumeFreeTrial } from "./freeTrial.js";
 import { LANDING_PAGE_HTML } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment } from "./notify/paymentLog.js";
+import { sendTelegramAlert } from "./notify/telegram.js";
 import { getSignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 import { runAutoAttestForAsset } from "./attestation/autoAttest.js";
@@ -87,13 +88,13 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         `GET ${RESOURCE_PATHS[asset]}`,
         { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS[asset] },
       ]),
-      // Rotas de decisão (Camada 1) — mesmo preço-base por enquanto; preço
-      // premium por decisão é uma alavanca de negócio (a decisão vale mais que
-      // o dado), deixada como config futura pra não embutir uma decisão de
-      // pricing aqui.
+      // Rotas de decisão (Camada 1) — preço PREMIUM (DECISION_PRICE_USD, default
+      // $0.05 vs $0.01 do sinal cru): a decisão MOVE/HOLD vale mais que o dado
+      // que a DefiLlama dá de graça, e o preço sinaliza isso ao robô-comprador.
+      // Mesma fonte de preço usada pela tool MCP get_yield_decision.
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
         `GET ${DECISION_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: DECISION_DESCRIPTIONS[asset] },
+        { price: env.DECISION_PRICE_USD, description: DECISION_DESCRIPTIONS[asset] },
       ]),
     ]),
   });
@@ -170,6 +171,15 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         }),
       ),
     );
+    // Quem me avisa quando quebra? Se algum asset falhou (erro de leitura ou —
+    // o caso mais comum e importante — saldo de gas abaixo do piso), dispara
+    // alerta pro dono. `void`: não bloqueia a resposta ao cron esperando o
+    // Telegram, e sendTelegramAlert nunca lança (no-op se não configurado).
+    const failures = results.filter((r) => r.error);
+    if (failures.length > 0) {
+      const lines = failures.map((f) => `• ${f.asset}: ${f.error}`).join("\n");
+      void sendTelegramAlert(`⚠️ YieldSignal — auto-attest falhou em ${failures.length} asset(s)\n\n${lines}`);
+    }
     res.json({ results });
   });
 

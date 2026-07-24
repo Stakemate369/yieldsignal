@@ -27,7 +27,9 @@ export const LANDING_PAGE_HTML = `<!doctype html>
 <h1>YieldSignal</h1>
 <p class="sub">Real-time, risk-weighted USDC and WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base, plus ETH liquid staking APY on Ethereum mainnet across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH — paid per call via <a href="https://x402.org">x402</a>.</p>
 
-<p><span class="badge">$0.01/call</span><span class="badge">3 free/day per IP via ?trial=1</span><span class="badge">no API key</span></p>
+<p><span class="badge">$0.01/call</span><span class="badge">3 free/day per IP via ?trial=1</span><span class="badge">no API key</span><span class="badge">signed + on-chain track record</span></p>
+
+<p><strong>Proven, not promised.</strong> Machine-readable accuracy at <a href="/accuracy.json"><code>/accuracy.json</code></a> — a within-tolerance hit-rate (was the flagged protocol the leader, or within 25bps?) and average regret in bps, computed 1:1 from the public on-chain EAS track record. A paying agent can check the record before deciding to trust the signal, instead of taking a claim on faith.</p>
 
 <h2>REST</h2>
 <pre>GET https://yieldsignal.vercel.app/signal/usdc-base-yield

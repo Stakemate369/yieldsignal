@@ -35,16 +35,20 @@ const ERC20_BALANCE_ABI = [
 ] as const;
 
 // Mesma verificação que o plugin ships (src/security.ts#verifyYieldSignalSignature).
+// A rota /signal assina o corpo inteiro (o corpo É o sinal); a rota /decision
+// assina o SINAL EMBUTIDO (`decision.signal`), não o corpo da decisão — então o
+// contentHash é sobre esse sub-objeto. `signedBytes` já vem resolvido conforme
+// a rota.
 async function verifySignature(params: {
-  raw: string;
+  signedBytes: string;
   signature: `0x${string}`;
   signer: `0x${string}`;
   eip712Json: string;
 }): Promise<{ signerMatchesPayee: boolean; contentHashMatches: boolean; signatureValid: boolean }> {
-  const { raw, signature, signer, eip712Json } = params;
+  const { signedBytes, signature, signer, eip712Json } = params;
   const signerMatchesPayee = getAddress(signer) === ADVERTISED_PAYEE;
   const { domain, types, primaryType, message } = JSON.parse(eip712Json);
-  const contentHashMatches = message.contentHash === keccak256(toBytes(raw));
+  const contentHashMatches = message.contentHash === keccak256(toBytes(signedBytes));
   let signatureValid = false;
   try {
     signatureValid = await verifyTypedData({
@@ -97,19 +101,34 @@ async function main(): Promise<void> {
   const signer = res.headers.get("x-signal-signer") as `0x${string}` | null;
   const eip712Json = res.headers.get("x-signal-eip712-payload");
 
+  const body = JSON.parse(raw) as {
+    asset?: string;
+    bestProtocol?: string;
+    gapBps?: number;
+    // Presente na rota /decision — é o sub-objeto que foi assinado.
+    signal?: { bestProtocol?: string; gapBps?: number };
+  };
+  // A rota /decision assina `JSON.stringify(decision.signal)`; a /signal assina
+  // o corpo inteiro. Reproduz os bytes exatos que o servidor assinou.
+  const signedBytes = body.signal !== undefined ? JSON.stringify(body.signal) : raw;
+
   const verification =
     signature && signer && eip712Json
-      ? await verifySignature({ raw, signature, signer, eip712Json })
+      ? await verifySignature({ signedBytes, signature, signer, eip712Json })
       : null;
 
-  const balanceAfter = (await publicClient.readContract({
-    address: USDC_BASE_MAINNET,
-    abi: ERC20_BALANCE_ABI,
-    functionName: "balanceOf",
-    args: [evmAddress],
-  })) as bigint;
-
-  const body = JSON.parse(raw) as { asset?: string; bestProtocol?: string; gapBps?: number };
+  // A liquidação x402 (transferência USDC via facilitator) pode não ter minerado
+  // ainda quando lemos o saldo — faz polling curto até o saldo cair.
+  let balanceAfter = balanceBefore;
+  for (let i = 0; i < 12 && balanceAfter >= balanceBefore; i++) {
+    await new Promise((r) => setTimeout(r, 2500));
+    balanceAfter = (await publicClient.readContract({
+      address: USDC_BASE_MAINNET,
+      abi: ERC20_BALANCE_ABI,
+      functionName: "balanceOf",
+      args: [evmAddress],
+    })) as bigint;
+  }
 
   console.log("===== YieldSignal — evidência de pagamento real e-2-e =====");
   console.log(JSON.stringify(
@@ -125,7 +144,11 @@ async function main(): Promise<void> {
       signer,
       advertisedPayee: ADVERTISED_PAYEE,
       verification,
-      signal: { asset: body.asset, bestProtocol: body.bestProtocol, gapBps: body.gapBps },
+      signal: {
+        asset: body.asset,
+        bestProtocol: body.bestProtocol ?? body.signal?.bestProtocol,
+        gapBps: body.gapBps ?? body.signal?.gapBps,
+      },
     },
     null,
     2,

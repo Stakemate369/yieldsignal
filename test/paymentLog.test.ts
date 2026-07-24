@@ -5,6 +5,7 @@ import type { SettleResultContext } from "@x402/core/server";
 let logSettledPayment: typeof LogSettledPayment;
 let infoMock: ReturnType<typeof vi.fn>;
 let warnMock: ReturnType<typeof vi.fn>;
+let telegramMock: ReturnType<typeof vi.fn>;
 
 function context(overrides: Partial<SettleResultContext> = {}): SettleResultContext {
   return {
@@ -23,10 +24,15 @@ function context(overrides: Partial<SettleResultContext> = {}): SettleResultCont
 
 beforeEach(async () => {
   vi.resetModules();
+  delete process.env.SELF_PAYER_ADDRESSES;
   infoMock = vi.fn();
   warnMock = vi.fn();
+  telegramMock = vi.fn(async () => {});
   vi.doMock("../src/notify/logger.js", () => ({
     logger: { info: infoMock, warn: warnMock, error: vi.fn() },
+  }));
+  vi.doMock("../src/notify/telegram.js", () => ({
+    sendTelegramAlert: telegramMock,
   }));
   ({ logSettledPayment } = await import("../src/notify/paymentLog.js"));
 });
@@ -71,7 +77,32 @@ describe("logSettledPayment", () => {
   it("nunca lança, mesmo com um contexto malformado — não pode derrubar a liquidação já feita", () => {
     // @ts-expect-error contexto propositalmente inválido
     expect(() => logSettledPayment(null, "rest")).not.toThrow();
-    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(warnMock).toHaveBeenCalled();
     expect(infoMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("alerta de pagador externo (venda real)", () => {
+  it("dispara alerta no Telegram quando o payer NÃO é uma carteira própria", () => {
+    logSettledPayment(context({ result: { success: true, payer: "0xStranger000000000000000000000000000000aa", transaction: "0xtx", network: "eip155:8453", amount: "50000" } }), "rest");
+    expect(telegramMock).toHaveBeenCalledTimes(1);
+    const [msg] = telegramMock.mock.calls[0] as [string];
+    expect(msg).toContain("PAGADOR EXTERNO");
+    expect(msg).toContain("0xStranger000000000000000000000000000000aa");
+  });
+
+  it("NÃO alerta quando o payer é a carteira compradora própria conhecida (case-insensitive)", () => {
+    logSettledPayment(context({ result: { success: true, payer: "0xc2432775f205333d15ecae61d56cd7fe1f6c3c15", transaction: "0xtx", network: "eip155:8453", amount: "50000" } }), "rest");
+    expect(telegramMock).not.toHaveBeenCalled();
+  });
+
+  it("NÃO alerta quando o payer está em SELF_PAYER_ADDRESSES", async () => {
+    process.env.SELF_PAYER_ADDRESSES = "0xStranger000000000000000000000000000000aa";
+    vi.resetModules();
+    vi.doMock("../src/notify/logger.js", () => ({ logger: { info: infoMock, warn: warnMock, error: vi.fn() } }));
+    vi.doMock("../src/notify/telegram.js", () => ({ sendTelegramAlert: telegramMock }));
+    ({ logSettledPayment } = await import("../src/notify/paymentLog.js"));
+    logSettledPayment(context({ result: { success: true, payer: "0xStranger000000000000000000000000000000aa", transaction: "0xtx", network: "eip155:8453", amount: "50000" } }), "rest");
+    expect(telegramMock).not.toHaveBeenCalled();
   });
 });

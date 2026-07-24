@@ -62,6 +62,12 @@ const schema = z.object({
   // quando o auto-attest falha (ex.: saldo de gas abaixo do piso).
   TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_CHAT_ID: z.string().default(""),
+  // Carteiras compradoras do PRÓPRIO dono (smoke/e-2-e/testes) — pagamentos
+  // vindos delas NÃO contam como venda real e não disparam o alerta de
+  // "pagador externo" (ver notify/paymentLog.ts). Lista separada por vírgula.
+  // A carteira compradora conhecida já entra como default no código; some as
+  // suas outras aqui se tiver mais de uma.
+  SELF_PAYER_ADDRESSES: z.string().default(""),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 

@@ -68,6 +68,12 @@ const schema = z.object({
   // A carteira compradora conhecida já entra como default no código; some as
   // suas outras aqui se tiver mais de uma.
   SELF_PAYER_ADDRESSES: z.string().default(""),
+  // Protege GET /usage.json (relatório interno do funil de uso). Mesmo padrão
+  // fail-closed do CRON_TRIGGER_SECRET: vazio NEGA sempre. Se não for
+  // configurado, a rota aceita o próprio CRON_TRIGGER_SECRET como fallback —
+  // ver expressApp.ts. Não confundir com dado público: contagem de chamadas é
+  // informação de negócio, não faz parte do produto vendido.
+  USAGE_READ_SECRET: z.string().default(""),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 

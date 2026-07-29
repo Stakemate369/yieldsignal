@@ -1,6 +1,7 @@
 import type { SettleResultContext } from "@x402/core/server";
 import { logger } from "./logger.js";
 import { sendTelegramAlert } from "./telegram.js";
+import { recordSale, recordUsage, routeFromResourceUrl } from "../usage/usageStore.js";
 
 export type PaymentChannel = "rest" | "mcp";
 
@@ -17,6 +18,12 @@ function selfPayerSet(): Set<string> {
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0);
   return new Set([...DEFAULT_SELF_PAYERS.map((a) => a.toLowerCase()), ...fromEnv]);
+}
+
+/** Um pagamento vindo de carteira do próprio dono não é venda. Exportado pra reuso no registro durável. */
+export function isSelfPayer(payer: string | undefined | null): boolean {
+  if (!payer) return false;
+  return selfPayerSet().has(payer.toLowerCase());
 }
 
 /**
@@ -88,4 +95,45 @@ export function logSettledPayment(context: SettleResultContext, channel: Payment
   // Alerta de venda real (pagador externo) — guardado à parte com seu próprio
   // try/catch dentro, pra uma falha aqui não afetar o log acima nem a liquidação.
   alertOnExternalPayer(context, channel);
+}
+
+/**
+ * Registro DURÁVEL da liquidação (contador de funil + histórico de vendas).
+ * Separado de `logSettledPayment` de propósito: aquele é síncrono e precisa
+ * continuar assim (o alerta de Telegram dispara antes de qualquer await), este
+ * é assíncrono porque escreve num store externo e quer ser aguardado dentro do
+ * hook de settlement — em serverless, uma promise solta depois da resposta pode
+ * ser congelada antes de completar.
+ *
+ * Motivo de existir: `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` não estão
+ * configurados em produção, então o alerta de pagador externo é um no-op hoje —
+ * a primeira venda real a um terceiro (2026-07-27) passou silenciosa e só foi
+ * descoberta dias depois lendo `Transfer` de USDC on-chain. Isto faz a venda
+ * aparecer em /usage.json independente do Telegram.
+ *
+ * Nunca lança: a liquidação já aconteceu, nada aqui pode desfazê-la.
+ */
+export async function recordSettlementUsage(context: SettleResultContext, channel: PaymentChannel): Promise<void> {
+  try {
+    const payer = context.result.payer;
+    const external = !isSelfPayer(payer);
+    const resource = context.paymentPayload.resource?.url;
+    await recordUsage({
+      kind: "settled",
+      channel,
+      route: routeFromResourceUrl(resource),
+      outcome: external ? "external" : "self",
+    });
+    await recordSale({
+      at: new Date().toISOString(),
+      payer: payer ?? "unknown",
+      amount: String(context.result.amount ?? context.requirements.amount ?? "?"),
+      resource: context.paymentPayload.resource?.url ?? "unknown",
+      channel,
+      transaction: String(context.result.transaction ?? "?"),
+      external,
+    });
+  } catch (err) {
+    logger.warn({ err }, "falha registrando liquidação de forma durável — liquidação em si não foi afetada");
+  }
 }

@@ -10,6 +10,8 @@ import {
   dayKey,
   TOTAL_KEY,
   __resetMemoryCountsForTest,
+  __resetBudgetForTest,
+  probeUsageStore,
   type FetchLike,
 } from "../src/usage/usageStore.js";
 
@@ -24,6 +26,7 @@ function okResponse(results: unknown[]): Response {
 
 beforeEach(() => {
   __resetMemoryCountsForTest();
+  __resetBudgetForTest();
 });
 
 describe("resolveRedisRestConfig", () => {
@@ -116,7 +119,7 @@ describe("recordUsage", () => {
   const env = { KV_REST_API_URL: "https://r.io", KV_REST_API_TOKEN: "t" } as NodeJS.ProcessEnv;
 
   it("incrementa o dia E o total, e põe TTL no dia", async () => {
-    const fetchImpl = vi.fn(async () => okResponse([1, 1, 1, 1, 1])) as unknown as FetchLike;
+    const fetchImpl = vi.fn(async () => okResponse([1, 1, 1, 1, 1, 1])) as unknown as FetchLike;
     const now = new Date("2026-07-29T12:00:00Z");
     const ok = await recordUsage({ kind: "challenged", channel: "rest", route: "signal", asset: "USDC" }, { fetchImpl, env, now });
 
@@ -125,8 +128,8 @@ describe("recordUsage", () => {
     expect(url).toBe("https://r.io/pipeline");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer t");
     const commands = JSON.parse(init.body as string) as unknown[][];
-    // 2 campos x 2 chaves + EXPIRE
-    expect(commands).toHaveLength(5);
+    // contador de orçamento + 2 campos x 2 chaves + EXPIRE
+    expect(commands).toHaveLength(6);
     expect(commands).toEqual(
       expect.arrayContaining([
         ["HINCRBY", dayKey(now), "challenged", 1],
@@ -222,5 +225,82 @@ describe("readUsage", () => {
     // Venda malformada é descartada em silêncio, a boa sobrevive.
     expect(report.sales).toHaveLength(1);
     expect(report.sales[0].payer).toBe("0xfe2d");
+  });
+});
+
+describe("teto diário de eventos (protege a cota compartilhada)", () => {
+  const env = { KV_REST_API_URL: "https://r.io", KV_REST_API_TOKEN: "t", USAGE_MAX_EVENTS_PER_DAY: "3" } as NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    __resetBudgetForTest();
+  });
+
+  it("o contador de eventos vem primeiro no pipeline (resultado[0] é o total do dia)", async () => {
+    const fetchImpl = vi.fn(async () => okResponse([1, 1, 1, 1, 1, 1])) as unknown as FetchLike;
+    await recordUsage({ kind: "challenged", asset: "USDC" }, { fetchImpl, env });
+    const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    const commands = JSON.parse(init.body as string) as unknown[][];
+    expect(commands[0][2]).toBe("_events");
+  });
+
+  it("para de gastar comandos depois de estourar o teto, até virar o dia", async () => {
+    // Primeira gravação já devolve contador no teto (3) -> marca estourado.
+    const fetchImpl = vi.fn(async () => okResponse([3, 1, 1, 1, 1, 1])) as unknown as FetchLike;
+    const now = new Date("2026-07-29T10:00:00Z");
+    await recordUsage({ kind: "challenged" }, { fetchImpl, env, now });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    // Eventos seguintes no MESMO dia não fazem request nenhum.
+    await recordUsage({ kind: "challenged" }, { fetchImpl, env, now });
+    await recordUsage({ kind: "served" }, { fetchImpl, env, now });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    // Dia seguinte volta a gravar.
+    await recordUsage({ kind: "served" }, { fetchImpl, env, now: new Date("2026-07-30T10:00:00Z") });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("abaixo do teto não pausa nada", async () => {
+    const fetchImpl = vi.fn(async () => okResponse([1, 1, 1, 1, 1, 1])) as unknown as FetchLike;
+    await recordUsage({ kind: "served" }, { fetchImpl, env });
+    await recordUsage({ kind: "served" }, { fetchImpl, env });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("probeUsageStore (vigia)", () => {
+  const env = { KV_REST_API_URL: "https://r.io", KV_REST_API_TOKEN: "t" } as NodeJS.ProcessEnv;
+
+  it("ok quando grava e lê de volta o mesmo valor", async () => {
+    const now = new Date("2026-07-29T10:00:00Z");
+    const fetchImpl = (async () => okResponse(["OK", String(now.getTime()), 1])) as FetchLike;
+    const health = await probeUsageStore({ fetchImpl, env, now });
+    expect(health).toEqual({ ok: true, durable: true, backend: "KV_REST_API_URL" });
+  });
+
+  it("NÃO ok quando lê de volta valor diferente (store respondendo lixo)", async () => {
+    const fetchImpl = (async () => okResponse(["OK", "valor-errado", 1])) as FetchLike;
+    const health = await probeUsageStore({ fetchImpl, env, now: new Date("2026-07-29T10:00:00Z") });
+    expect(health.ok).toBe(false);
+    expect(health.error).toMatch(/leu de volta valor diferente/);
+  });
+
+  it("NÃO ok quando o store não responde", async () => {
+    const fetchImpl = (async () => ({ ok: false, status: 429, json: async () => [] }) as unknown as Response) as FetchLike;
+    const health = await probeUsageStore({ fetchImpl, env });
+    expect(health.ok).toBe(false);
+    expect(health.error).toMatch(/não respondeu/);
+  });
+
+  it("NÃO ok e sem backend quando não há credencial (contando só em memória)", async () => {
+    const health = await probeUsageStore({ env: {} as NodeJS.ProcessEnv });
+    expect(health).toMatchObject({ ok: false, durable: false, backend: null });
+  });
+
+  it("nunca lança, mesmo com o fetch explodindo", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("boom");
+    }) as FetchLike;
+    await expect(probeUsageStore({ fetchImpl, env })).resolves.toMatchObject({ ok: false });
   });
 });

@@ -13,3 +13,8 @@ npm_recovery_codes.txt
 *.secret
 
 .vercel
+
+# Credenciais/URLs locais de recursos provisionados (nunca versionar)
+*.local
+*.local.*
+LEIA-ME-upstash*

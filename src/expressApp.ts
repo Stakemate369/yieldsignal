@@ -24,7 +24,7 @@ import { consumeFreeTrial } from "./freeTrial.js";
 import { renderLandingPage } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
-import { recordUsage, readUsage } from "./usage/usageStore.js";
+import { recordUsage, readUsage, probeUsageStore } from "./usage/usageStore.js";
 import { usageEntryMiddleware } from "./usage/usageMiddleware.js";
 import { sendTelegramAlert } from "./notify/telegram.js";
 import { getSignerAccount } from "./wallet/signerAccount.js";
@@ -224,16 +224,30 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         }),
       ),
     );
+    // Vigia da telemetria, de carona no único gatilho diário que já existe
+    // (nenhum cron novo). O modo de falha do store é SILENCIOSO por design — a
+    // telemetria é best-effort e o produto segue servindo —, então sem esta
+    // sonda uma quebra só apareceria quando alguém fosse olhar o número, meses
+    // depois. Mesma lição da primeira venda real, que passou dias sem aviso
+    // porque o alerta dependia de variável não configurada.
+    const storeHealth = await probeUsageStore();
+
     // Quem me avisa quando quebra? Se algum asset falhou (erro de leitura ou —
-    // o caso mais comum e importante — saldo de gas abaixo do piso), dispara
-    // alerta pro dono. `void`: não bloqueia a resposta ao cron esperando o
-    // Telegram, e sendTelegramAlert nunca lança (no-op se não configurado).
+    // o caso mais comum e importante — saldo de gas abaixo do piso), ou se o
+    // store de uso parou de responder, dispara alerta pro dono. `void`: não
+    // bloqueia a resposta ao cron esperando o Telegram, e sendTelegramAlert
+    // nunca lança (no-op se não configurado).
     const failures = results.filter((r) => r.error);
-    if (failures.length > 0) {
-      const lines = failures.map((f) => `• ${f.asset}: ${f.error}`).join("\n");
-      void sendTelegramAlert(`⚠️ YieldSignal — auto-attest falhou em ${failures.length} asset(s)\n\n${lines}`);
+    const problems: string[] = failures.map((f) => `• auto-attest ${f.asset}: ${f.error}`);
+    if (!storeHealth.ok) {
+      problems.push(`• store de uso (${storeHealth.backend ?? "sem backend"}): ${storeHealth.error ?? "indisponível"}`);
     }
-    res.json({ results });
+    if (problems.length > 0) {
+      void sendTelegramAlert(
+        `⚠️ YieldSignal — ${problems.length} problema(s) na checagem diária\n\n${problems.join("\n")}`,
+      );
+    }
+    res.json({ results, usageStore: storeHealth });
   });
 
   // Dashboard de track record — fonte da verdade é o próprio EAS (attestation/

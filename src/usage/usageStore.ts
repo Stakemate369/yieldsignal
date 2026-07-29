@@ -73,6 +73,44 @@ const SALES_KEY = `${KEY_PREFIX}:sales`;
 const SALES_KEEP = 50;
 const DEFAULT_TIMEOUT_MS = 800;
 
+/**
+ * Campo contador de eventos do dia, usado como ORÇAMENTO. Nome com `_` na
+ * frente pra não colidir com nenhum campo de evento real.
+ */
+const EVENTS_FIELD = "_events";
+
+/**
+ * Teto de eventos por dia. Existe porque este store compartilha a instância de
+ * Redis com o YieldPilot — um agente que movimenta dinheiro de verdade. Sem
+ * teto, uma enxurrada de sondas de descoberta (cada 402 é um evento) poderia
+ * consumir a cota do plano free e fazer a gravação de ESTADO do YieldPilot
+ * falhar. Telemetria nunca pode degradar o agente financeiro.
+ *
+ * 800 eventos/dia ≈ 4.800 comandos/dia, ordens de magnitude acima do tráfego
+ * real (dezenas por dia) e ainda bem abaixo da cota, deixando folga pro vizinho.
+ * As chaves são todas `yieldsignal:usage:*`, então nunca há colisão de dado —
+ * a disputa possível é só de cota, e é isso que este teto resolve.
+ */
+const DEFAULT_MAX_EVENTS_PER_DAY = 800;
+
+function maxEventsPerDay(env: NodeJS.ProcessEnv): number {
+  const raw = Number(env.USAGE_MAX_EVENTS_PER_DAY);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_MAX_EVENTS_PER_DAY;
+}
+
+/**
+ * Marca, por instância, que o orçamento do dia estourou. Uma vez marcado, os
+ * eventos seguintes não gastam comando NENHUM (nem o INCR do contador). Em
+ * serverless cada instância descobre isso por conta própria na primeira
+ * gravação depois do teto — custo de descoberta baixo e limitado.
+ */
+let budgetExhaustedForDay: string | null = null;
+
+/** Só pros testes. */
+export function __resetBudgetForTest(): void {
+  budgetExhaustedForDay = null;
+}
+
 export interface RedisRestConfig {
   url: string;
   token: string;
@@ -178,14 +216,23 @@ export interface RecordOptions {
 export async function recordUsage(event: UsageEvent, options: RecordOptions = {}): Promise<boolean> {
   const fields = usageFields(event);
   try {
-    const config = resolveRedisRestConfig(options.env ?? process.env);
+    const env = options.env ?? process.env;
+    const config = resolveRedisRestConfig(env);
     if (!config) {
       bumpMemory(fields);
       return false;
     }
-    const fetchImpl = options.fetchImpl ?? (globalThis.fetch as FetchLike);
     const key = dayKey(options.now ?? new Date());
-    const commands: (string | number)[][] = [];
+
+    // Orçamento estourado neste dia: não gasta nem o comando do contador.
+    if (budgetExhaustedForDay === key) {
+      bumpMemory(fields);
+      return false;
+    }
+
+    const fetchImpl = options.fetchImpl ?? (globalThis.fetch as FetchLike);
+    // O contador de eventos vem PRIMEIRO pra o resultado[0] ser o total do dia.
+    const commands: (string | number)[][] = [["HINCRBY", key, EVENTS_FIELD, 1]];
     for (const f of fields) {
       commands.push(["HINCRBY", key, f, 1]);
       commands.push(["HINCRBY", TOTAL_KEY, f, 1]);
@@ -195,6 +242,15 @@ export async function recordUsage(event: UsageEvent, options: RecordOptions = {}
     if (result === null) {
       bumpMemory(fields);
       return false;
+    }
+
+    const eventsToday = Number(result[0]);
+    if (Number.isFinite(eventsToday) && eventsToday >= maxEventsPerDay(env)) {
+      budgetExhaustedForDay = key;
+      logger.warn(
+        { eventsToday, key },
+        "usage store: teto diário de eventos atingido — telemetria pausada até virar o dia (protege a cota compartilhada com o YieldPilot)",
+      );
     }
     return true;
   } catch (err) {
@@ -333,6 +389,71 @@ export async function readUsage(dayCount = 14, options: RecordOptions = {}): Pro
     : [];
 
   return { durable: true, backend: config.source, total, days, sales, asOf };
+}
+
+export interface StoreHealth {
+  /** true = escreveu E leu de volta o valor esperado num store real. */
+  ok: boolean;
+  /** false = está contando só em memória (número parcial, some no reciclo da instância). */
+  durable: boolean;
+  /** Nome da variável de ambiente de onde a credencial veio, ou null. */
+  backend: string | null;
+  error?: string;
+}
+
+/**
+ * Sonda de saúde do store: grava uma chave própria, lê de volta e apaga.
+ *
+ * Existe pra que uma quebra da telemetria seja AVISADA em vez de descoberta
+ * meses depois. O modo de falha silenciosa é o perigoso: o produto continua
+ * funcionando (a telemetria é best-effort de propósito), então nada chama
+ * atenção — exatamente o que aconteceu com a primeira venda real, que passou
+ * dias sem ninguém saber porque o alerta dependia de uma variável não
+ * configurada. Chamada 1x/dia pelo gatilho de auto-attest, que já tem cron
+ * externo e já sabe alertar no Telegram: nenhuma infraestrutura nova.
+ *
+ * Custa ~3 comandos por dia. Nunca lança.
+ */
+export async function probeUsageStore(options: RecordOptions = {}): Promise<StoreHealth> {
+  const env = options.env ?? process.env;
+  const config = resolveRedisRestConfig(env);
+  if (!config) {
+    return { ok: false, durable: false, backend: null, error: "nenhuma credencial de Redis configurada — contando só em memória" };
+  }
+  const probeKey = `${KEY_PREFIX}:healthprobe`;
+  try {
+    const fetchImpl = options.fetchImpl ?? (globalThis.fetch as FetchLike);
+    const stamp = String((options.now ?? new Date()).getTime());
+    const result = await redisPipeline(
+      config,
+      [
+        ["SET", probeKey, stamp, "EX", 120],
+        ["GET", probeKey],
+        ["DEL", probeKey],
+      ],
+      fetchImpl,
+      (options.timeoutMs ?? DEFAULT_TIMEOUT_MS) * 3,
+    );
+    if (result === null) {
+      return { ok: false, durable: false, backend: config.source, error: "store não respondeu (rede, credencial inválida ou cota estourada)" };
+    }
+    if (String(result[1]) !== stamp) {
+      return {
+        ok: false,
+        durable: false,
+        backend: config.source,
+        error: `escreveu mas leu de volta valor diferente (esperado ${stamp}, veio ${String(result[1])})`,
+      };
+    }
+    return { ok: true, durable: true, backend: config.source };
+  } catch (err) {
+    return {
+      ok: false,
+      durable: false,
+      backend: config.source,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /** Só pros testes — zera o estado em memória entre casos. */

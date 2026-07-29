@@ -124,9 +124,22 @@ export interface RedisRestConfig {
  * terminando em `KV_REST_API_URL` ou `REDIS_REST_URL` (com ou sem prefixo da
  * integração), derivando o token pela mesma variável com `URL`→`TOKEN`.
  */
+/**
+ * Limpa um valor de variável de ambiente: espaços e ASPAS ENVOLVENTES.
+ *
+ * As aspas importam de verdade: arquivos `.env` costumam guardar
+ * `URL="https://..."`, e copiar esse valor pra um painel/CLI leva as aspas
+ * junto. O resultado é `fetch('"https://..."/pipeline')` — URL inválida, exceção
+ * capturada, telemetria degradando pra memória em silêncio. Bug real cometido
+ * ao portar a credencial do projeto irmão; barato de neutralizar aqui.
+ */
+function cleanEnvValue(raw: string | undefined): string {
+  return (raw ?? "").trim().replace(/^['"]|['"]$/g, "").trim();
+}
+
 export function resolveRedisRestConfig(env: NodeJS.ProcessEnv = process.env): RedisRestConfig | null {
-  const explicitUrl = env.USAGE_REDIS_REST_URL?.trim();
-  const explicitToken = env.USAGE_REDIS_REST_TOKEN?.trim();
+  const explicitUrl = cleanEnvValue(env.USAGE_REDIS_REST_URL);
+  const explicitToken = cleanEnvValue(env.USAGE_REDIS_REST_TOKEN);
   if (explicitUrl && explicitToken) {
     return { url: explicitUrl.replace(/\/+$/, ""), token: explicitToken, source: "USAGE_REDIS_REST_URL" };
   }
@@ -136,10 +149,10 @@ export function resolveRedisRestConfig(env: NodeJS.ProcessEnv = process.env): Re
   // comportamento estável quando as duas formas coexistem.
   urlKeys.sort((a, b) => a.length - b.length || a.localeCompare(b));
   for (const urlKey of urlKeys) {
-    const url = env[urlKey]?.trim();
+    const url = cleanEnvValue(env[urlKey]);
     if (!url) continue;
     const tokenKey = urlKey.replace(/URL$/, "TOKEN");
-    const token = env[tokenKey]?.trim();
+    const token = cleanEnvValue(env[tokenKey]);
     if (!token) continue;
     return { url: url.replace(/\/+$/, ""), token, source: urlKey };
   }

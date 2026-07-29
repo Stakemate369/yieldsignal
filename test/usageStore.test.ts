@@ -59,6 +59,15 @@ describe("resolveRedisRestConfig", () => {
     expect(cfg?.url).toBe("https://curto.io");
   });
 
+  it("tira ASPAS ENVOLVENTES do valor — .env costuma guardar URL=\"https://...\" e a aspa viajava pro fetch", () => {
+    const cfg = resolveRedisRestConfig({
+      UPSTASH_REDIS_REST_KV_REST_API_URL: '"https://x.upstash.io"',
+      UPSTASH_REDIS_REST_KV_REST_API_TOKEN: "'tok3'",
+    } as NodeJS.ProcessEnv);
+    expect(cfg?.url).toBe("https://x.upstash.io");
+    expect(cfg?.token).toBe("tok3");
+  });
+
   it("devolve null quando existe URL mas não existe o token correspondente", () => {
     expect(resolveRedisRestConfig({ KV_REST_API_URL: "https://x.io" } as NodeJS.ProcessEnv)).toBeNull();
   });

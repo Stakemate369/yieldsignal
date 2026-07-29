@@ -15,7 +15,8 @@ import { decideMove } from "./signal/decideMove.js";
 import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
 import { ASSET_IDS } from "./market-data/types.js";
 import { logger } from "./notify/logger.js";
-import { logSettledPayment } from "./notify/paymentLog.js";
+import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
+import { recordUsage } from "./usage/usageStore.js";
 import type { SignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 
@@ -99,6 +100,7 @@ export async function createMcpRequestHandler(
   // duas tools (ambas liquidam no mesmo resourceServer).
   resourceServer.onAfterSettle(async (context) => {
     logSettledPayment(context, "mcp");
+    await recordSettlementUsage(context, "mcp");
   });
 
   // Fábrica de servidor: um McpServer FRESCO por sessão MCP, com as duas tools
@@ -116,6 +118,7 @@ export async function createMcpRequestHandler(
           // Toda chamada aqui é paga — `paidSignal()` só passa depois que o
           // pagamento liquidou (o MCP não tem free trial, ao contrário do REST).
           logger.info({ channel: "mcp", asset }, "sinal servido");
+          await recordUsage({ kind: "served", route: "signal", channel: "mcp", asset });
           const readings = await collectRates(asset);
           const signal = computeSignal(readings);
           // Bloco de texto original SEM alteração (é o que fica assinado) +
@@ -165,6 +168,7 @@ export async function createMcpRequestHandler(
         }
         try {
           logger.info({ channel: "mcp-decision", asset }, "decisão servida");
+          await recordUsage({ kind: "served", route: "decision", channel: "mcp", asset });
           const readings = await collectRates(asset);
           const decision = decideMove(readings, parsed.input);
           // Assina o SINAL embutido (mesmo contrato do REST /decision/*): a

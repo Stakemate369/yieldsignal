@@ -17,11 +17,15 @@ import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
 import { computeAccuracyScore } from "./attestation/accuracyScore.js";
 import { GUARANTEE_TERMS } from "./guarantee/terms.js";
 import type { AssetId } from "./market-data/types.js";
+import { FLAGSHIP_ASSET } from "./market-data/types.js";
+import { cachedWithTtl } from "./market-data/cache.js";
 import { createMcpRequestHandler } from "./mcp.js";
 import { consumeFreeTrial } from "./freeTrial.js";
-import { LANDING_PAGE_HTML } from "./landingPage.js";
+import { renderLandingPage } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
-import { logSettledPayment } from "./notify/paymentLog.js";
+import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
+import { recordUsage, readUsage } from "./usage/usageStore.js";
+import { usageEntryMiddleware } from "./usage/usageMiddleware.js";
 import { sendTelegramAlert } from "./notify/telegram.js";
 import { getSignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
@@ -33,10 +37,13 @@ import { AGENT_CARD_JSON } from "./agentCard.js";
 // Um path por ativo vendido — cada um é uma rota x402 protegida separada,
 // mesmo preço/descrição-base, preço e descrição próprios só pra deixar claro
 // no 402 qual sinal está sendo cobrado.
+// Ordem = ordem de apresentação (registro das rotas, lista de endpoints do 404,
+// iteração do auto-attest). ETH_STAKING primeiro por evidência de acurácia —
+// ver FLAGSHIP_ASSET em market-data/types.ts. Nada funcional depende da ordem.
 export const RESOURCE_PATHS: Record<AssetId, string> = {
+  ETH_STAKING: "/signal/eth-staking-yield",
   USDC: "/signal/usdc-base-yield",
   WETH: "/signal/weth-base-yield",
-  ETH_STAKING: "/signal/eth-staking-yield",
 };
 
 // Mantido pra quem ainda referencia o path original diretamente (scripts de
@@ -47,9 +54,9 @@ export const RESOURCE_PATH = RESOURCE_PATHS.USDC;
 // mas vendem a recomendação MOVE/HOLD (com break-even e confiança), não o
 // dado bruto. Um path por ativo, separado das rotas de sinal acima.
 export const DECISION_PATHS: Record<AssetId, string> = {
+  ETH_STAKING: "/decision/eth-staking-yield",
   USDC: "/decision/usdc-base-yield",
   WETH: "/decision/weth-base-yield",
-  ETH_STAKING: "/decision/eth-staking-yield",
 };
 
 const DECISION_DESCRIPTIONS: Record<AssetId, string> = {
@@ -57,6 +64,14 @@ const DECISION_DESCRIPTIONS: Record<AssetId, string> = {
   WETH: "Buyer-side MOVE/HOLD decision for WETH lending on Base — same contract as the USDC decision route, for WETH.",
   ETH_STAKING: "Buyer-side MOVE/HOLD decision for ETH liquid staking (Ethereum mainnet) — same contract as the lending decision routes, for ETH staking.",
 };
+
+// Sufixo comum a TODA descrição de rota — é o texto que o comprador-robô lê no
+// próprio desafio 402 e nos diretórios (Bazaar, trust indexes). Aponta pro
+// score de acurácia POR ASSET em vez de afirmar um número aqui: número escrito
+// à mão numa descrição apodrece e não é verificável, que é o oposto do que este
+// serviço vende. O consumidor compara os assets por conta própria e escolhe.
+const ACCURACY_POINTER =
+  " Per-asset verified accuracy (within-tolerance hit-rate and average regret in bps, computed from the public on-chain EAS track record) is free at /accuracy.json — compare assets there before paying, and check /track-record for the raw attestations.";
 
 const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
   USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
@@ -86,7 +101,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     routes: Object.fromEntries([
       ...(Object.keys(RESOURCE_PATHS) as AssetId[]).map((asset) => [
         `GET ${RESOURCE_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS[asset] },
+        { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS[asset] + ACCURACY_POINTER },
       ]),
       // Rotas de decisão (Camada 1) — preço PREMIUM (DECISION_PRICE_USD, default
       // $0.05 vs $0.01 do sinal cru): a decisão MOVE/HOLD vale mais que o dado
@@ -94,7 +109,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // Mesma fonte de preço usada pela tool MCP get_yield_decision.
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
         `GET ${DECISION_PATHS[asset]}`,
-        { price: env.DECISION_PRICE_USD, description: DECISION_DESCRIPTIONS[asset] },
+        { price: env.DECISION_PRICE_USD, description: DECISION_DESCRIPTIONS[asset] + ACCURACY_POINTER },
       ]),
     ]),
   });
@@ -127,6 +142,9 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // usa seu PRÓPRIO x402ResourceServer, registrado à parte em mcp.ts).
   server.resourceServer.onAfterSettle(async (context) => {
     logSettledPayment(context, "rest");
+    // Aguardado (não solto): em serverless a instância pode congelar assim que a
+    // resposta sai, e perder justamente o registro da venda.
+    await recordSettlementUsage(context, "rest");
   });
 
   const app = express();
@@ -134,8 +152,43 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // proxy, não do chamador real — quebraria a cota gratuita por IP abaixo.
   app.set("trust proxy", true);
 
-  app.get("/", (_req, res) => {
-    res.type("html").send(LANDING_PAGE_HTML);
+  // Página inicial com a tabela de acurácia renderizada do dado REAL a cada
+  // carga (nunca número hardcoded, que apodrece e vira propaganda falsa). O
+  // score vem do mesmo caminho de /accuracy.json, atrás de um cache de 10min
+  // pra não consultar o EAS a cada visita; se a consulta falhar, a página é
+  // servida SEM a seção em vez de com dado velho ou com 5xx.
+  const cachedAccuracyScore = cachedWithTtl(async () => {
+    if (!env.EAS_SCHEMA_UID) return null;
+    const entries = await buildTrackRecord({
+      schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+      attester: signer.address,
+    });
+    return computeAccuracyScore(entries);
+  }, 10 * 60 * 1000);
+
+  // Handler assíncrono precisa capturar TUDO por dentro: Express 4 não trata
+  // rejeição de handler async, e uma unhandled rejection derruba o processo
+  // inteiro (não existe processGuards neste repo). Vale pra toda rota async
+  // adicionada aqui.
+  app.get("/", async (_req, res) => {
+    let score: Awaited<ReturnType<typeof cachedAccuracyScore>> = null;
+    try {
+      score = await cachedAccuracyScore();
+    } catch (err) {
+      logger.warn({ err }, "não deu pra ler o score de acurácia pra página inicial — servindo sem a seção");
+    }
+    try {
+      res
+        .type("html")
+        .send(renderLandingPage({ score, signalPrice: env.PRICE_USD, decisionPrice: env.DECISION_PRICE_USD }));
+    } catch (err) {
+      // Score em formato inesperado não pode virar 5xx na página de entrada:
+      // degrada pro cartão de visita mínimo, sem a seção de acurácia.
+      logger.error({ err }, "falha renderizando a página inicial com score — servindo versão sem score");
+      res
+        .type("html")
+        .send(renderLandingPage({ score: null, signalPrice: env.PRICE_USD, decisionPrice: env.DECISION_PRICE_USD }));
+    }
   });
 
   // Liveness barato pra monitoramento externo (cron-job.org) — sem pagamento
@@ -223,6 +276,32 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     }
   });
 
+  // Funil de uso — INTERNO, não é produto. Protegido com o mesmo padrão
+  // fail-closed do auto-attest: sem segredo configurado, nega sempre (nunca
+  // "aberto por falta de config"). Aceita um segredo próprio
+  // (USAGE_READ_SECRET) e, na falta dele, reaproveita CRON_TRIGGER_SECRET, que
+  // já existe em produção — assim a instrumentação começa a ser legível sem
+  // depender de configurar variável nova.
+  //
+  // Não é público de propósito: número de chamadas é informação de negócio, e
+  // um número baixo exposto num endpoint aberto trabalha contra a adoção que o
+  // resto do serviço tenta construir.
+  app.get("/usage.json", async (req, res) => {
+    const secret = env.USAGE_READ_SECRET || env.CRON_TRIGGER_SECRET;
+    if (!secret || req.headers.authorization !== `Bearer ${secret}`) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    try {
+      const days = Math.min(Math.max(Number(req.query.days ?? 14) || 14, 1), 90);
+      const report = await readUsage(days);
+      res.json(report);
+    } catch (err) {
+      logger.error({ err }, "falha lendo relatório de uso");
+      res.status(503).json({ error: "falha temporária lendo o relatório de uso" });
+    }
+  });
+
   // CAMADA 3: termos da garantia econômica — GRÁTIS, read-only, e HONESTO
   // sobre o status (motor pronto, escrow ainda não deployado). Nenhuma
   // promessa de payout ativa até o bond ser fundeado (ver src/guarantee/).
@@ -267,9 +346,15 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         res.setHeader("X-Signal-Signer", signed.signer);
         res.setHeader("X-Signal-Eip712-Payload", JSON.stringify(eip712ForTransport(signed.eip712)));
       }
+      // Contado só aqui, DEPOIS de tudo que pode falhar (leitura + assinatura):
+      // registrar logo após o collectRates contava "served" mesmo quando a
+      // assinatura estourava e o comprador levava 503 — o mesmo pedido entrava
+      // como served E failed, inflando o topo do funil.
+      await recordUsage({ kind: "served", route: "signal", channel: "rest", asset });
       res.type("application/json").send(raw);
     } catch (err) {
       logger.error({ err, asset }, "falha gerando sinal");
+      await recordUsage({ kind: "failed", route: "signal", channel: "rest", asset });
       res.status(503).json({ error: "falha temporária lendo taxas — tente de novo em instantes" });
     }
   }
@@ -285,6 +370,16 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // Erro de parâmetro do comprador — 400, não 5xx. O pagamento x402 já
       // liquidou nesse ponto; um input inválido é responsabilidade do chamador,
       // mas a mensagem é clara pra ele corrigir e chamar de novo.
+      //
+      // Contado como `failed:...:bad_request` de propósito: sem isso o funil
+      // ficaria com um buraco inexplicável (pagou, liquidou, e nunca apareceu
+      // served nem failed) — e um comprador que paga e recebe 400 por não saber
+      // montar a query é justamente o problema de adoção que vale detectar.
+      try {
+        await recordUsage({ kind: "failed", route: "decision", channel: "rest", asset, outcome: "bad_request" });
+      } catch {
+        /* telemetria nunca altera a resposta */
+      }
       res.status(400).json({ error: parsed.error });
       return;
     }
@@ -301,9 +396,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         res.setHeader("X-Signal-Signer", signed.signer);
         res.setHeader("X-Signal-Eip712-Payload", JSON.stringify(eip712ForTransport(signed.eip712)));
       }
+      await recordUsage({ kind: "served", route: "decision", channel: "rest", asset });
       res.type("application/json").send(JSON.stringify(decision));
     } catch (err) {
       logger.error({ err, asset }, "falha gerando decisão");
+      await recordUsage({ kind: "failed", route: "decision", channel: "rest", asset });
       res.status(503).json({ error: "falha temporária lendo taxas — tente de novo em instantes" });
     }
   }
@@ -318,6 +415,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   for (const asset of Object.keys(RESOURCE_PATHS) as AssetId[]) {
     app.get(
       RESOURCE_PATHS[asset],
+      // Etapa do funil ANTES de qualquer decisão de pagamento — é o que revela
+      // quantos 402 são servidos (sonda de descoberta incluída) versus quantos
+      // realmente tentam pagar. Sem isto o projeto só conseguia auditar receita
+      // liquidada on-chain e ficava cego sobre demanda.
+      usageEntryMiddleware("signal", asset),
       // Cota gratuita de degustação, só sob opt-in explícito (?trial=1) — uma
       // sonda de descoberta (x402scan, Bazaar, trust indexes) bate na URL sem
       // esse parâmetro e precisa ver 402 na resposta pra classificar isso como
@@ -353,6 +455,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   for (const asset of Object.keys(DECISION_PATHS) as AssetId[]) {
     app.get(
       DECISION_PATHS[asset],
+      usageEntryMiddleware("decision", asset),
       (req, res, next) => {
         if (req.query.trial !== "1") {
           next();
@@ -388,6 +491,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     "/decision/usdc": DECISION_PATHS.USDC,
     "/decision/weth": DECISION_PATHS.WETH,
     "/decision/eth-staking": DECISION_PATHS.ETH_STAKING,
+    // Sem asset nenhum: resolve pro asset de vitrine (o de melhor histórico
+    // verificado, ver FLAGSHIP_ASSET). Um agente que chuta a raiz do recurso
+    // recebia 404; agora cai no produto mais defensável do catálogo.
+    "/signal": RESOURCE_PATHS[FLAGSHIP_ASSET],
+    "/decision": DECISION_PATHS[FLAGSHIP_ASSET],
   };
   for (const [alias, canonical] of Object.entries(SHORT_ALIASES)) {
     app.get(alias, (req, res) => {
@@ -402,7 +510,14 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // "falso 404" de vez: quem erra o caminho recebe o guia pra se autocorrigir,
   // não um beco sem saída. Registrado por último, depois de todas as rotas
   // reais e dos aliases, pra só pegar o que sobrou.
-  app.use((req, res) => {
+  app.use(async (req, res) => {
+    // Conta caminho errado: se este número for alto perto de `challenged`, o
+    // problema de adoção é de descoberta/documentação, não de preço.
+    try {
+      await recordUsage({ kind: "not_found", channel: "rest" });
+    } catch {
+      // Nunca deixa a telemetria transformar um 404 em processo derrubado.
+    }
     res.status(404).json({
       error: "route not found",
       path: req.path,
@@ -418,7 +533,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         ],
         mcp: "/mcp",
         aliases:
-          "short forms like /signal/usdc and /decision/usdc redirect (308) to the canonical *-base-yield paths",
+          `short forms like /signal/usdc and /decision/usdc redirect (308) to the canonical paths; bare /signal and /decision redirect to the ${FLAGSHIP_ASSET} route (the asset with the strongest verified track record — see /accuracy.json)`,
       },
     });
   });

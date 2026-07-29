@@ -4,6 +4,7 @@ import { readMorphoVaultApy } from "../market-data/morpho.js";
 import { readDefiLlamaPoolApy } from "../market-data/defillamaPools.js";
 import { collectEthStakingRates } from "../market-data/ethStaking.js";
 import type { AssetId, RateReading } from "../market-data/types.js";
+import { LENDING_DEFILLAMA_PROTOCOLS } from "./expectedProtocols.js";
 import { logger } from "../notify/logger.js";
 
 /**
@@ -35,8 +36,9 @@ export async function collectRates(asset: AssetId): Promise<RateReading[]> {
     }
   });
 
-  const defiLlamaProtocols = ["fluid", "moonwell", "euler"] as const;
-  const viaDefiLlama = await Promise.all(defiLlamaProtocols.map((p) => readDefiLlamaPoolApy(p, asset)));
+  // Mesma constante que expectedProtocols.ts usa pra medir cobertura — uma
+  // fonte só, pra a lista percorrida e a lista esperada não poderem divergir.
+  const viaDefiLlama = await Promise.all(LENDING_DEFILLAMA_PROTOCOLS.map((p) => readDefiLlamaPoolApy(p, asset)));
   const layer2 = viaDefiLlama.filter((r): r is RateReading => r !== null);
 
   const all = [...direct, ...layer2];

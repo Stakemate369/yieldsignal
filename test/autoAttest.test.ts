@@ -9,6 +9,8 @@ function signal(overrides: Partial<YieldSignal> = {}): YieldSignal {
     bestProtocol: "compound",
     gapBps: 50,
     rates: [{ protocol: "compound", apyBps: 500, weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" }],
+    omittedProtocols: [],
+    coverage: { read: 1, expected: 1 },
     asOf: "2026-07-17T12:00:00.000Z",
     ...overrides,
   };

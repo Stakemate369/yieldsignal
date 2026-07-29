@@ -9,7 +9,7 @@ import type { RateReading, StakingProtocolId } from "./types.js";
  * têm mercado na Base. Verificado ao vivo em 2026-07-20 contra
  * yields.llama.fi/pools (chain=Ethereum, maior TVL de cada projeto).
  */
-const POOLS: Record<StakingProtocolId, { poolId: string; project: string; symbol: string }> = {
+export const POOLS: Record<StakingProtocolId, { poolId: string; project: string; symbol: string }> = {
   lido: { poolId: "747c1d2a-c668-4682-b9f9-296708a3dd90", project: "lido", symbol: "STETH" },
   "rocket-pool": { poolId: "d4b3c522-6127-4b89-bedf-83641cdcd2eb", project: "rocket-pool", symbol: "RETH" },
   "coinbase-wrapped-staked-eth": {

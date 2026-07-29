@@ -1,5 +1,6 @@
 import type { AssetId, ProtocolId, RateReading } from "../market-data/types.js";
 import { weightedApyBps } from "../strategy/riskWeights.js";
+import { omittedProtocols } from "./expectedProtocols.js";
 
 export interface SignalRate {
   protocol: ProtocolId;
@@ -15,6 +16,16 @@ export interface YieldSignal {
   /** Diferença em bps entre o 1º e o 2º colocado (ponderado por risco) — quanto maior, mais clara a vantagem. */
   gapBps: number;
   rates: SignalRate[];
+  /**
+   * Protocolos que o serviço TENTA ler pra este asset mas que não entraram
+   * nesta resposta (fonte falhou ou devolveu dado inválido). Vazio = cobertura
+   * total. Sem isto, o comprador não conseguia distinguir "protocolo X não é
+   * competitivo" de "protocolo X não foi lido" — e `bestProtocol` era
+   * apresentado como o melhor do mercado quando era só o melhor do que sobrou.
+   */
+  omittedProtocols: ProtocolId[];
+  /** Quantos protocolos entraram / quantos eram esperados — leitura rápida da confiabilidade desta chamada. */
+  coverage: { read: number; expected: number };
   asOf: string;
 }
 
@@ -43,14 +54,22 @@ export function computeSignal(readings: RateReading[]): YieldSignal {
   const [best, second] = rates;
   const gapBps = second ? best.weightedApyBps - second.weightedApyBps : 0;
 
+  // Todas as leituras de uma chamada vêm de collectRates(asset) pro MESMO
+  // asset — seguro pegar do primeiro item em vez de exigir o parâmetro de
+  // novo aqui (computeSignal continua puro, sem I/O, só dados que já chegam).
+  const asset = readings[0].asset;
+  const omitted = omittedProtocols(
+    asset,
+    rates.map((r) => r.protocol),
+  );
+
   return {
-    // Todas as leituras de uma chamada vêm de collectRates(asset) pro MESMO
-    // asset — seguro pegar do primeiro item em vez de exigir o parâmetro de
-    // novo aqui (computeSignal continua puro, sem I/O, só dados que já chegam).
-    asset: readings[0].asset,
+    asset,
     bestProtocol: best.protocol,
     gapBps,
     rates,
+    omittedProtocols: omitted,
+    coverage: { read: rates.length, expected: rates.length + omitted.length },
     asOf: new Date().toISOString(),
   };
 }

@@ -2,14 +2,28 @@
 
 [![CI](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml/badge.svg)](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml)
 
-Real-time, risk-weighted USDC and WETH lending APY across **Aave, Compound, Morpho, Moonwell, Euler and Fluid** on Base — paid per call via the [x402](https://x402.org) protocol. $0.01 USDC, no API key, no signup. First 3 calls/day per IP are free via `?trial=1`.
+Risk-weighted yield signals for autonomous agents, paid per call via the [x402](https://x402.org) protocol — no API key, no signup. First 3 calls/day per IP are free via `?trial=1`.
+
+- **ETH liquid staking** (Ethereum mainnet) across **Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH**
+- **USDC and WETH lending** (Base) across **Aave, Compound, Morpho, Moonwell, Euler and Fluid**
+
+Two tiers: the raw **signal** (what pays best right now) and the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days).
 
 **Live:** `https://yieldsignal.vercel.app`
 
 ```
+GET https://yieldsignal.vercel.app/signal/eth-staking-yield
 GET https://yieldsignal.vercel.app/signal/usdc-base-yield
 GET https://yieldsignal.vercel.app/signal/weth-base-yield
+
+GET https://yieldsignal.vercel.app/decision/eth-staking-yield?position=lido&amountUsd=25000&horizonDays=30
 ```
+
+Bare `/signal` and `/decision` (no asset) redirect to the ETH staking route — the asset with the strongest verified track record. Short forms like `/signal/usdc` redirect to the canonical path.
+
+### Which asset should you trust?
+
+Don't take our word for it: `GET /accuracy.json` is **free** and returns the per-asset within-tolerance hit-rate and average regret in bps, computed 1:1 from the public on-chain [EAS](https://attest.org) track record. As of writing, the staking signal holds up far better than the USDC lending one (Base USDC churns too fast for a call to stay true) — which is exactly why the flagship is staking. The numbers are recomputed from chain data, not asserted here, so check them yourself before paying.
 
 Call it without payment first and you'll get a `402 Payment Required` with the exact price/asset/network to pay. Any x402-compatible client can complete the payment automatically — for example with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch):
 
@@ -27,7 +41,7 @@ console.log(await res.json());
 
 ### MCP
 
-Also available as a paid MCP tool at `https://yieldsignal.vercel.app/mcp` (`get_yield_signal`, optional `asset`: `"USDC"` or `"WETH"`, defaults to USDC) — most autonomous-agent frameworks discover/call tools via MCP rather than hand-rolled x402 HTTP clients. Uses the official [`@x402/mcp`](https://www.npmjs.com/package/@x402/mcp) package; payment is gated per tool call (`tools/list`/`initialize` stay free, only `get_yield_signal` requires payment).
+Also available as paid MCP tools at `https://yieldsignal.vercel.app/mcp` — `get_yield_signal` and `get_yield_decision`, both with an optional `asset` (`"ETH_STAKING"`, `"USDC"` or `"WETH"`; defaults to `"USDC"` for backwards compatibility with already-published integrations). Most autonomous-agent frameworks discover/call tools via MCP rather than hand-rolled x402 HTTP clients. Uses the official [`@x402/mcp`](https://www.npmjs.com/package/@x402/mcp) package; payment is gated per tool call (`tools/list`/`initialize` stay free, only the tool call requires payment). There's also an [elizaOS plugin](https://www.npmjs.com/package/elizaos-plugin-yieldsignal) in the official registry.
 
 ### Response shape
 
@@ -48,6 +62,8 @@ Every rate is tagged with **where it came from** — `onchain`/`api` (Aave, Comp
 
 ## Verifiability
 
+> Full write-up with every on-chain artifact, the exact command to verify each one, and an honest list of what the stack does **not** solve: [`docs/verifiable-agent-trust.md`](./docs/verifiable-agent-trust.md).
+
 Two independent ways to check a response wasn't tampered with or fabricated, neither requiring you to trust this server's uptime at the moment you check:
 
 - **Signed responses** — every REST/MCP response is signed (EIP-712 typed data) by the same `payTo` address the 402 payment requirement names. The struct (`asset`, `bestProtocol`, `weightedApyBps`, `gapBps`, `asOf`, `contentHash`) mirrors the on-chain EAS schema below, plus a `contentHash` (`keccak256` of the exact response body) binding it to the full response. REST: `X-Signal-Signature`/`X-Signal-Signer`/`X-Signal-Eip712-Payload` headers. MCP: a sibling content block. Verify with [viem's `verifyTypedData`](https://viem.sh/docs/actions/wallet/verifyTypedData) — or just call `getSignalVerified()` from the [`yieldsignal-client`](./client) package, which does both checks for you.
@@ -65,7 +81,8 @@ Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but 
 - `src/mcp.ts` — the `get_yield_signal` MCP tool (optional `asset` param), gated per-call with `@x402/mcp`'s `createPaymentWrapper` (not the whole-route Express middleware, which would paywall `tools/list`/`initialize` too).
 - `src/market-data/cache.ts` — 30s TTL on every rate reader (direct + DefiLlama), one cache instance per asset, so a burst of concurrent paid calls doesn't hammer public RPC/API endpoints.
 - `src/freeTrial.ts` — 3 free calls/day per IP (in-memory, best-effort — not a hard cap across serverless instances, just adoption-friction removal). Only applied on `?trial=1`; a bare `GET` always 402s so x402 discovery crawlers (x402scan, Bazaar, trust indexes) correctly detect this as a paid endpoint.
-- `src/notify/paymentLog.ts` — logs payer/tx/network/amount for every settled payment (`onAfterSettle`, both the REST and MCP payment servers), plus a usage line per call (paid or free) — revenue/usage visibility, not just a live product.
+- `src/notify/paymentLog.ts` — logs payer/tx/network/amount for every settled payment (`onAfterSettle`, both the REST and MCP payment servers) and alerts on a payment from a wallet that isn't the owner's (a real sale).
+- `src/usage/` — durable funnel counters (`usageStore.ts` + `usageMiddleware.ts`), readable at `GET /usage.json` (auth required). Counts 402s served, free trials, paid attempts, settlements, failures and 404s per route/asset. Exists because platform runtime logs aren't reachable from outside, so the only auditable signal used to be on-chain revenue — which can't distinguish "nobody arrives" from "they arrive and don't pay". Backend is any Redis with a REST API; credential discovery matches by env-var **suffix**, so a store connected through the Vercel dashboard (which prefixes the vars it injects) is picked up with no code change. With no store configured it degrades to per-instance in-memory counters and reports `"durable": false`.
 - `src/cli/withdraw.ts` — sweeps accumulated USDC to the owner's personal wallet, manual `CONFIRM` required, never automatic.
 - `src/wallet/signerAccount.ts` — resolves the same receiver wallet with `signMessage`/`signTypedData`/`sendTransaction` exposed (`createX402Server` only exposes the address); used for response signing and EAS attestation.
 - `src/attestation/` — EAS schema definition and calldata encoding (pure, unit tested); `publishAttestation.ts` (shared tx-sending logic), `queryAttestations.ts` (EASScan GraphQL client + decoder), `autoAttest.ts` (pure decision logic + orchestration for the automatic trigger), `trackRecord.ts` (then-vs-now comparison), `erc8004.ts` (ERC-8004 registry addresses/ABI).
@@ -76,7 +93,7 @@ Sibling project to YieldPilot (a personal Aave/Morpho/Compound rebalancer), but 
 ```bash
 npm install
 npm test                # automated tests (market-data readers, signal logic, retry, wallet lock, free trial)
-npm run signal            # live signal, real data, zero credentials needed (USDC by default; `npm run signal -- WETH` for the other asset)
+npm run signal            # live signal, real data, zero credentials needed (`npm run signal -- ETH_STAKING` / `-- WETH` for the other assets)
 npm run dev               # local x402 server (reads X402_ENVIRONMENT from .env)
 npm run test:paid         # spins up a test buyer wallet, funds it via the CDP faucet, pays for real (testnet only, REST endpoint)
 npm run withdraw          # sweep accumulated USDC — asks for typed "CONFIRM"

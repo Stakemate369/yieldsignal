@@ -45,7 +45,28 @@ export type AssetId = LendingAssetId | "ETH_STAKING";
 // e o z.enum da tool MCP (mcp.ts) importam daqui em vez de cada um manter a
 // própria cópia da lista (achado em revisão: eram 3 literais hand-kept-in-sync,
 // exatamente o tipo de coisa que dá pra esquecer de atualizar num asset novo).
-export const ASSET_IDS = ["USDC", "WETH", "ETH_STAKING"] as const satisfies readonly AssetId[];
+export const ASSET_IDS = ["ETH_STAKING", "USDC", "WETH"] as const satisfies readonly AssetId[];
+
+/**
+ * Asset "cabeça de vitrine": o que a página inicial lidera, o que os aliases
+ * curtos sem asset (`/signal`, `/decision`) resolvem, e o primeiro da lista de
+ * endpoints devolvida num 404.
+ *
+ * É ETH_STAKING por evidência, não por gosto: medido em 2026-07-29 sobre 100
+ * atestações EAS reais, o within-tolerance rate por asset era ETH_STAKING 100%
+ * / WETH 100% / USDC 37,7% (regret médio 1bps / 0bps / 62bps). O produto
+ * original (lending de USDC na Base) é justamente o mais fraco — o mercado gira
+ * rápido demais pra chamada durar —, enquanto staking é pegajoso e o sinal se
+ * sustenta. Liderar com o asset mais fraco desperdiçava a única prova pública
+ * que o serviço tem. O mercado de staking de ETH também é ordens de grandeza
+ * maior que lending de USDC na Base.
+ *
+ * A ORDEM de ASSET_IDS acima segue o mesmo critério (staking primeiro). Nada
+ * depende dessa ordem pra funcionar — só a apresentação. E o default da tool
+ * MCP continua "USDC" DE PROPÓSITO: mudá-lo alteraria em silêncio o que as
+ * integrações já publicadas (plugin elizaOS 0.2.0) recebem sem pedir asset.
+ */
+export const FLAGSHIP_ASSET: AssetId = "ETH_STAKING";
 
 export interface RateReading {
   protocol: ProtocolId;

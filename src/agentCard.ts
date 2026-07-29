@@ -14,8 +14,13 @@ import { ERC8004_BASE_MAINNET } from "./attestation/erc8004.js";
 const AGENT_CARD = {
   type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   name: "YieldSignal",
+  // Lidera com ETH staking, não com lending de USDC: é o asset cujo histórico
+  // público de acurácia sustenta a afirmação (ver FLAGSHIP_ASSET em
+  // market-data/types.ts). Preço NÃO é citado aqui de propósito — a descrição é
+  // servida estaticamente e o valor real vem de PRICE_USD/DECISION_PRICE_USD no
+  // desafio 402; número de preço escrito aqui desatualiza sem ninguém notar.
   description:
-    "Real-time, risk-weighted yield signals: USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base, plus ETH liquid staking APY across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH on Ethereum mainnet — sold per-call via x402 ($0.01), REST + MCP. Every response signed (EIP-712 typed data) by the payment-receiving address; periodic on-chain attestations (EAS, Base mainnet) provide a public, permanent track record independent of this server's uptime.",
+    "Real-time, risk-weighted yield signals for autonomous agents: ETH liquid staking APY across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH on Ethereum mainnet, plus USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base — sold per-call via x402, REST + MCP, no API key. Two product tiers: the raw signal, and a buyer-side MOVE/HOLD decision with expected net gain and break-even in days. Every response signed (EIP-712 typed data) by the payment-receiving address; periodic on-chain attestations (EAS, Base mainnet) provide a public, permanent track record independent of this server's uptime, and per-asset verified accuracy is free at /accuracy.json.",
   services: [
     { name: "web", endpoint: "https://yieldsignal.vercel.app/" },
     { name: "MCP", endpoint: "https://yieldsignal.vercel.app/mcp", version: "2025-06-18" },

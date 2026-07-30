@@ -55,8 +55,8 @@ Every rate is also compared on **one explicit basis** (`apyBasis: "supply-apy-to
   "bestProtocol": "compound",
   "gapBps": 150,
   "rates": [
-    { "protocol": "compound", "apyBps": 601, "apyBaseBps": 601, "apyRewardBps": 0, "rewardBasis": "reported", "weightedApyBps": 595, "source": "onchain", "asOf": "2026-07-30T..." },
-    { "protocol": "moonwell", "apyBps": 434, "apyBaseBps": 403, "apyRewardBps": 31, "rewardBasis": "reported", "weightedApyBps": 382, "source": "defillama", "asOf": "..." }
+    { "protocol": "compound", "apyBps": 601, "apyBaseBps": 601, "apyRewardBps": 0, "rewardBasis": "reported", "tvlUsd": 8446455, "tvlBasis": "total-supplied", "weightedApyBps": 595, "source": "onchain", "asOf": "2026-07-30T..." },
+    { "protocol": "moonwell", "apyBps": 434, "apyBaseBps": 403, "apyRewardBps": 31, "rewardBasis": "reported", "tvlUsd": 2643239, "tvlBasis": "aggregator-reported", "weightedApyBps": 382, "source": "defillama", "asOf": "..." }
   ],
   "omittedProtocols": ["euler"],
   "coverage": { "read": 5, "expected": 6 },
@@ -65,6 +65,14 @@ Every rate is also compared on **one explicit basis** (`apyBasis: "supply-apy-to
   "asOf": "2026-07-30T..."
 }
 ```
+
+### Depth, and whether the yield is a campaign
+
+Each rate also carries `tvlUsd` with a `tvlBasis` saying what that number measures — `total-supplied` when it comes from the protocol's own books (Aave `totalAToken`, Comet `totalSupply`, Morpho `totalAssetsUsd`), `aggregator-reported` when it comes from DefiLlama, which reports *available liquidity* for lending markets. They are not the same quantity and the field says which one you got. Depth matters because the top of a thin market is not an executable rate for size: at the time of writing, the WETH signal leads with a $716k market whose yield is 59% incentive campaign.
+
+The decision routes act on both: `/decision/*` returns `gainDependsOnIncentives` and `positionShareOfDestinationPct`, states them in the human-readable `reason`, and lowers confidence when your position would be a large share of the destination. A real response:
+
+> `MOVE`, confidence `medium` — "Moving aave → euler yields +106bps risk-adjusted … Note: the entire gain rests on euler's incentive campaign (172bps of its 291bps) — it disappears if the campaign ends. Note: your $200,000 would be 27.9% of euler's $716,897 market — large enough that entering dilutes the rate you are moving for."
 
 ### How long is a signal good for?
 

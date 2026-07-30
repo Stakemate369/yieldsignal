@@ -131,7 +131,7 @@ export function readingFromPool<T extends { protocol: string; asset: string }>(
   match: DefiLlamaPool | undefined,
   build: (match: DefiLlamaPool) => T,
   logContext: Record<string, unknown>,
-): (T & { supplyApyBps: number; apyBaseBps: number | null; apyRewardBps: number | null; rewardBasis: "reported" | "included-not-itemized"; tvlUsd: number | null; source: "defillama"; readAt: Date }) | null {
+): (T & { supplyApyBps: number; apyBaseBps: number | null; apyRewardBps: number | null; rewardBasis: "reported" | "included-not-itemized"; tvlUsd: number | null; tvlBasis: "aggregator-reported" | null; source: "defillama"; readAt: Date }) | null {
   if (!match) {
     logger.warn(logContext, "pool não encontrado (ou não bate mais poolId/project/chain/symbol) na resposta atual da DefiLlama — omitindo desta vez");
     return null;
@@ -162,6 +162,7 @@ export function readingFromPool<T extends { protocol: string; asset: string }>(
     // da fonte, então o total é comparável — só não dá pra itemizar.
     rewardBasis: split.rewardBps === null ? ("included-not-itemized" as const) : ("reported" as const),
     tvlUsd: Number.isFinite(match.tvlUsd) ? match.tvlUsd : null,
+    tvlBasis: Number.isFinite(match.tvlUsd) ? ("aggregator-reported" as const) : null,
     source: "defillama",
     readAt: new Date(),
   };

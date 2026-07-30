@@ -3,6 +3,7 @@ import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
 import { readIncentiveComponent } from "./incentives.js";
+import { onchainDepthUsd } from "./depth.js";
 import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -25,6 +26,16 @@ const COMET_ABI = [
     stateMutability: "view",
     inputs: [{ name: "utilization", type: "uint256" }],
     outputs: [{ name: "", type: "uint64" }],
+  },
+  // Profundidade do mercado direto dos livros do Comet — o saldo total do ativo
+  // base fornecido. Existe porque o TVL do agregador estava errado por uma
+  // ordem de grandeza justamente aqui (ver market-data/depth.ts).
+  {
+    type: "function",
+    name: "totalSupply",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
 
@@ -52,6 +63,14 @@ async function readCompoundSupplyApyUncached(asset: LendingAssetId): Promise<Rat
   const apyBaseBps = compoundedRateToApyBps(perSecondFraction, true);
   const incentive = await readIncentiveComponent("compound", asset, apyBaseBps);
 
+  // Profundidade dos próprios livros. Best-effort de propósito: a taxa é o
+  // produto, a profundidade é contexto — uma falha aqui não pode derrubar a
+  // resposta paga, só deixa o campo cair no agregador (ou em null).
+  const onchainTvlUsd = await basePublicClient
+    .readContract({ address: comet, abi: COMET_ABI, functionName: "totalSupply" })
+    .then((total) => onchainDepthUsd(asset, total))
+    .catch(() => null);
+
   return {
     protocol: "compound",
     asset,
@@ -59,7 +78,9 @@ async function readCompoundSupplyApyUncached(asset: LendingAssetId): Promise<Rat
     apyBaseBps,
     apyRewardBps: incentive.rewardBps,
     rewardBasis: incentive.basis,
-    tvlUsd: incentive.tvlUsd,
+    // Livros do protocolo primeiro; agregador só onde não dá pra afirmar em USD.
+    tvlUsd: onchainTvlUsd ?? incentive.tvlUsd,
+    tvlBasis: onchainTvlUsd !== null ? "total-supplied" : incentive.tvlUsd !== null ? "aggregator-reported" : null,
     source: "onchain",
     readAt: new Date(),
   };

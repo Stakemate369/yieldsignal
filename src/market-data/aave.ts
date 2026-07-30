@@ -3,6 +3,7 @@ import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
 import { readIncentiveComponent } from "./incentives.js";
+import { onchainDepthUsd } from "./depth.js";
 import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -47,6 +48,10 @@ async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateRea
   const aprFraction = Number(liquidityRate) / Number(RAY);
   const apyBaseBps = compoundedRateToApyBps(aprFraction, false);
   const incentive = await readIncentiveComponent("aave", asset, apyBaseBps);
+  // `totalAToken` (índice 2 do mesmo tuple já lido) é a profundidade real do
+  // mercado, direto dos livros do protocolo — sem chamada extra. Ver
+  // onchainDepthUsd sobre por que só vale pra stablecoin.
+  const onchainTvlUsd = onchainDepthUsd(asset, data[2]);
 
   return {
     protocol: "aave",
@@ -55,7 +60,9 @@ async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateRea
     apyBaseBps,
     apyRewardBps: incentive.rewardBps,
     rewardBasis: incentive.basis,
-    tvlUsd: incentive.tvlUsd,
+    // Livros do protocolo primeiro; agregador só onde não dá pra afirmar em USD.
+    tvlUsd: onchainTvlUsd ?? incentive.tvlUsd,
+    tvlBasis: onchainTvlUsd !== null ? "total-supplied" : incentive.tvlUsd !== null ? "aggregator-reported" : null,
     source: "onchain",
     readAt: new Date(),
   };

@@ -9,7 +9,7 @@ function reading(
   source: RateReading["source"] = "onchain",
   asset: RateReading["asset"] = "USDC",
 ): RateReading {
-  return { protocol, asset, supplyApyBps, apyBaseBps: supplyApyBps, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, source, readAt: new Date("2026-07-21T12:00:00.000Z") };
+  return { protocol, asset, supplyApyBps, apyBaseBps: supplyApyBps, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", source, readAt: new Date("2026-07-21T12:00:00.000Z") };
 }
 
 // Pesos de risco: aave 1.0, morpho 0.97, compound 0.99. Usados aqui pra
@@ -118,24 +118,24 @@ describe("decideMove", () => {
 describe("confidenceFor", () => {
   it("high: gap >= 50bps E fonte direta (onchain/api)", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 600, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 600, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("high");
   });
 
   it("medium: gap >= 20bps mas fonte agregada (defillama) — não vira high", () => {
     const c = confidenceFor([
-      { protocol: "fluid", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 510, source: "defillama", asOf: "" },
-      { protocol: "aave", apyBps: 480, apyBaseBps: 480, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 480, source: "onchain", asOf: "" },
+      { protocol: "fluid", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 510, source: "defillama", asOf: "" },
+      { protocol: "aave", apyBps: 480, apyBaseBps: 480, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 480, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("medium");
   });
 
   it("low: gap pequeno (ruído) mesmo com fonte direta", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 500, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 495, apyBaseBps: 495, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 500, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 495, apyBaseBps: 495, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("low");
   });
@@ -149,16 +149,16 @@ describe("confidenceFor", () => {
   // invertido — e não dá pra saber por quanto.
   it("não vira high se o incentivo de um CONCORRENTE é desconhecido, mesmo com gap grande e fonte direta", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 600, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: null, rewardBasis: "unavailable", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 600, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: null, rewardBasis: "unavailable", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("medium");
   });
 
   it("incentivo desconhecido no PRÓPRIO líder não derruba a confiança — subestimar o líder não tira a liderança dele", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: null, rewardBasis: "unavailable", tvlUsd: 5_000_000, weightedApyBps: 600, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: null, rewardBasis: "unavailable", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 600, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("high");
   });
@@ -185,6 +185,7 @@ describe("dependência de campanha e profundidade do destino", () => {
       apyRewardBps: rewardBps,
       rewardBasis: (rewardBps === null ? "unavailable" : "reported") as "unavailable" | "reported",
       tvlUsd,
+      tvlBasis: (tvlUsd === null ? null : "total-supplied") as "total-supplied" | null,
       weightedApyBps,
       source: "defillama" as const,
       asOf: "",

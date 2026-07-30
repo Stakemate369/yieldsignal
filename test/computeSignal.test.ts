@@ -8,7 +8,7 @@ function reading(
   source: RateReading["source"] = "onchain",
   asset: RateReading["asset"] = "USDC",
 ): RateReading {
-  return { protocol, asset, supplyApyBps, apyBaseBps: supplyApyBps, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, source, readAt: new Date("2026-07-16T12:00:00.000Z") };
+  return { protocol, asset, supplyApyBps, apyBaseBps: supplyApyBps, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", source, readAt: new Date("2026-07-16T12:00:00.000Z") };
 }
 
 describe("computeSignal", () => {

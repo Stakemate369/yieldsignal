@@ -122,6 +122,22 @@ export interface RateReading {
    * bruto faz a rota inviável ganhar da viável).
    */
   tvlUsd: number | null;
+  /**
+   * O que `tvlUsd` mede — porque as fontes NÃO medem a mesma coisa, e a lição
+   * de APY_BASIS vale igual aqui: número comparado sem base declarada engana.
+   *
+   * - `total-supplied`: tudo que foi depositado no mercado, lido dos livros do
+   *   próprio protocolo (Aave `totalAToken`, Comet `totalSupply`, Morpho
+   *   `totalAssetsUsd`). É a base certa pra perguntar "minha entrada dilui a
+   *   taxa?", que depende da fatia do total.
+   * - `aggregator-reported`: o `tvlUsd` da DefiLlama. Pra mercado de lending
+   *   ela costuma reportar LIQUIDEZ DISPONÍVEL (depositado menos emprestado),
+   *   número menor e com outra pergunta por trás. Medido em 2026-07-30: USDC na
+   *   Aave da Base tinha US$ 176M depositados on-chain contra US$ 21,7M
+   *   reportados pela DefiLlama.
+   * - `null` quando `tvlUsd` é `null`.
+   */
+  tvlBasis: "total-supplied" | "aggregator-reported" | null;
   source: "onchain" | "api" | "defillama";
   readAt: Date;
 }

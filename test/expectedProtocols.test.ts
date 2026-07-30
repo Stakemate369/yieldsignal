@@ -9,7 +9,7 @@ import { computeSignal } from "../src/signal/computeSignal.js";
 import { ASSET_IDS, type RateReading } from "../src/market-data/types.js";
 
 function reading(protocol: RateReading["protocol"], asset: RateReading["asset"], apy: number): RateReading {
-  return { protocol, asset, supplyApyBps: apy, apyBaseBps: apy, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, source: "defillama", readAt: new Date("2026-07-29T12:00:00Z") };
+  return { protocol, asset, supplyApyBps: apy, apyBaseBps: apy, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, tvlBasis: "total-supplied", source: "defillama", readAt: new Date("2026-07-29T12:00:00Z") };
 }
 
 describe("EXPECTED_PROTOCOLS", () => {

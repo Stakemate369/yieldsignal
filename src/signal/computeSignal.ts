@@ -15,6 +15,8 @@ export interface SignalRate {
   rewardBasis: RateReading["rewardBasis"];
   /** Profundidade do mercado em USD. `null` = não apurável nesta leitura. Ver RateReading.tvlUsd. */
   tvlUsd: number | null;
+  /** O que `tvlUsd` mede — as fontes NÃO medem a mesma coisa. Ver RateReading.tvlBasis. */
+  tvlBasis: RateReading["tvlBasis"];
   weightedApyBps: number;
   source: RateReading["source"];
   asOf: string;
@@ -67,6 +69,7 @@ export function computeSignal(readings: RateReading[]): YieldSignal {
       apyRewardBps: r.apyRewardBps,
       rewardBasis: r.rewardBasis,
       tvlUsd: r.tvlUsd,
+      tvlBasis: r.tvlBasis,
       weightedApyBps: weightedApyBps(r.protocol, r.supplyApyBps),
       source: r.source,
       asOf: r.readAt.toISOString(),

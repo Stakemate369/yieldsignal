@@ -87,6 +87,8 @@ async function readMorphoVaultApyUncached(asset: LendingAssetId): Promise<RateRe
     apyRewardBps: null,
     rewardBasis: "included-not-itemized",
     tvlUsd: typeof totalAssetsUsd === "number" && Number.isFinite(totalAssetsUsd) ? totalAssetsUsd : null,
+    // `totalAssetsUsd` é o total depositado no vault, não liquidez disponível.
+    tvlBasis: typeof totalAssetsUsd === "number" && Number.isFinite(totalAssetsUsd) ? "total-supplied" : null,
     source: "api",
     readAt: new Date(),
   };

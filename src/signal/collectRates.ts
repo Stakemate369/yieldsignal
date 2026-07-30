@@ -2,6 +2,7 @@ import { readAaveSupplyApy } from "../market-data/aave.js";
 import { readCompoundSupplyApy } from "../market-data/compound.js";
 import { readMorphoVaultApy } from "../market-data/morpho.js";
 import { readDefiLlamaPoolApy } from "../market-data/defillamaPools.js";
+import { fetchDefiLlamaPools } from "../market-data/defillamaClient.js";
 import { collectEthStakingRates } from "../market-data/ethStaking.js";
 import type { AssetId, RateReading } from "../market-data/types.js";
 import { LENDING_DEFILLAMA_PROTOCOLS } from "./expectedProtocols.js";
@@ -23,6 +24,15 @@ export async function collectRates(asset: AssetId): Promise<RateReading[]> {
   if (asset === "ETH_STAKING") {
     return collectEthStakingRates();
   }
+
+  // Dispara a busca da DefiLlama ANTES das leituras diretas. Os leitores da
+  // Camada 1 passaram a consultar o componente de incentivo (incentives.ts), e
+  // eles o fazem DEPOIS de terminar a leitura on-chain — sem este aquecimento a
+  // chamada paga pagaria RPC e agregador em série (medido: ~+500ms). Com ele, a
+  // busca acontece em paralelo com o RPC e tanto o incentivo quanto a Camada 2
+  // abaixo caem no mesmo `inFlight`/cache. `void` + catch porque isto é só
+  // aquecimento: quem realmente precisa do resultado trata o próprio erro.
+  void fetchDefiLlamaPools().catch(() => undefined);
 
   const directReaders = [readAaveSupplyApy, readCompoundSupplyApy, readMorphoVaultApy];
 

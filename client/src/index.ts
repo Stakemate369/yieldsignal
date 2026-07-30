@@ -21,7 +21,14 @@ const RESOURCE_PATHS: Record<YieldSignalAsset, string> = {
 
 export interface SignalRate {
   protocol: "aave" | "morpho" | "compound" | "moonwell" | "euler" | "fluid" | "lido" | "rocket-pool" | "coinbase-wrapped-staked-eth" | "frax-ether" | "binance-staked-eth";
+  /** Total supply APY (base interest + incentives) — the number used for the ranking. */
   apyBps: number;
+  /** Base-interest component, when the source separates it. `null` = not itemised. */
+  apyBaseBps?: number | null;
+  /** Incentive component. `0` = knowingly no campaign; `null` = unknown on this reading. */
+  apyRewardBps?: number | null;
+  /** How the incentive component was obtained. */
+  rewardBasis?: "reported" | "inferred" | "included-not-itemized" | "unavailable";
   weightedApyBps: number;
   source: "onchain" | "api" | "defillama";
   asOf: string;
@@ -32,6 +39,17 @@ export interface YieldSignal {
   bestProtocol: SignalRate["protocol"];
   gapBps: number;
   rates: SignalRate[];
+  /**
+   * Protocols the service tries to read for this asset but that are absent from
+   * this response (source failed, or the pool reads mute). Non-empty means
+   * `bestProtocol` is the best of what answered — treat it as a weaker claim.
+   */
+  omittedProtocols?: SignalRate["protocol"][];
+  coverage?: { read: number; expected: number };
+  /** Protocols whose incentive component is unknown — their APY is a floor, not a verdict. */
+  incompleteRewardData?: SignalRate["protocol"][];
+  /** The single basis every APY in `rates` is expressed on. */
+  apyBasis?: "supply-apy-total-incl-rewards";
   asOf: string;
 }
 

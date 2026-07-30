@@ -52,3 +52,21 @@ describe("notFoundLabel", () => {
     expect(notFoundLabel(undefined)).toBe("other");
   });
 });
+
+describe("ruído de scanner não gasta a quota compartilhada", () => {
+  it("404 de varredura não escreve no Redis; 404 de produto escreve", async () => {
+    const { recordUsage } = await import("../src/usage/usageStore.js");
+    const chamadas: unknown[] = [];
+    const fetchImpl = (async (_u: string, init: { body?: string }) => {
+      chamadas.push(init.body);
+      return { ok: true, json: async () => [{ result: 1 }, { result: 1 }, { result: 1 }, { result: 1 }, { result: 1 }] };
+    }) as never;
+    const env = { USAGE_REDIS_REST_URL: "https://x", USAGE_REDIS_REST_TOKEN: "t" } as NodeJS.ProcessEnv;
+
+    await recordUsage({ kind: "not_found", channel: "rest", asset: "noise" }, { env, fetchImpl });
+    expect(chamadas.length).toBe(0);
+
+    await recordUsage({ kind: "not_found", channel: "rest", asset: "signal/usd" }, { env, fetchImpl });
+    expect(chamadas.length).toBe(1);
+  });
+});

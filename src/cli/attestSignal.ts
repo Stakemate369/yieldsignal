@@ -26,7 +26,9 @@ async function main(): Promise<void> {
   if (env.X402_ENVIRONMENT !== "production") {
     throw new Error('Atestação só faz sentido sobre dado real de mainnet — rode com X402_ENVIRONMENT="production".');
   }
-  if (!env.EAS_SCHEMA_UID) {
+  const attestSchemaUid = env.EAS_SCHEMA_UID_V2 || env.EAS_SCHEMA_UID;
+  const attestSchemaVersion: 1 | 2 = env.EAS_SCHEMA_UID_V2 ? 2 : 1;
+  if (!attestSchemaUid) {
     throw new Error('EAS_SCHEMA_UID não configurado — rode "npm run register-schema" uma vez antes de atestar.');
   }
 
@@ -69,7 +71,8 @@ async function main(): Promise<void> {
   const { transactionHash, uid } = await publishAttestation({
     signal,
     signer,
-    schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+    schemaUid: attestSchemaUid as `0x${string}`,
+    schemaVersion: attestSchemaVersion,
   });
 
   logger.info({ transactionHash, uid, asset: signal.asset, bestProtocol: signal.bestProtocol }, "sinal atestado on-chain");

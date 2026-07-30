@@ -2,7 +2,7 @@ import readline from "node:readline/promises";
 import { createPublicClient, decodeEventLog, encodeFunctionData, formatEther, http, zeroAddress } from "viem";
 import { loadEnv } from "../config/env.js";
 import { EAS_BASE_MAINNET, withdrawNetworkFor } from "../config/networks.js";
-import { SCHEMA_REGISTRY_ABI, SIGNAL_SCHEMA } from "../attestation/schema.js";
+import { SCHEMA_REGISTRY_ABI, SIGNAL_SCHEMA, SIGNAL_SCHEMA_V2 } from "../attestation/schema.js";
 import { getSignerAccount } from "../wallet/signerAccount.js";
 import { logger } from "../notify/logger.js";
 
@@ -20,9 +20,16 @@ async function main(): Promise<void> {
       'EAS só faz sentido sobre dado real de mainnet — rode com X402_ENVIRONMENT="production" (gasta ETH real de gas na Base).',
     );
   }
-  if (env.EAS_SCHEMA_UID) {
-    console.log(`EAS_SCHEMA_UID já está configurado (${env.EAS_SCHEMA_UID}) — nada a fazer.`);
-    console.log("Apague a variável antes de rodar este script de novo, se a intenção é registrar um schema novo.");
+  // Qual schema registrar: com o v1 já configurado e o v2 ainda não, o alvo é o
+  // v2 — é a migração descrita em attestation/schema.ts (segundo colocado +
+  // cobertura da leitura). Com os dois preenchidos, não há nada a fazer.
+  const target = env.EAS_SCHEMA_UID_V2
+    ? null
+    : env.EAS_SCHEMA_UID
+      ? { schema: SIGNAL_SCHEMA_V2, envVar: "EAS_SCHEMA_UID_V2" }
+      : { schema: SIGNAL_SCHEMA, envVar: "EAS_SCHEMA_UID" };
+  if (!target) {
+    console.log(`EAS_SCHEMA_UID (${env.EAS_SCHEMA_UID}) e EAS_SCHEMA_UID_V2 (${env.EAS_SCHEMA_UID_V2}) já configurados — nada a fazer.`);
     return;
   }
 
@@ -32,7 +39,8 @@ async function main(): Promise<void> {
   const ethBalance = await publicClient.getBalance({ address: signer.address });
 
   console.log("\nRegistro de schema EAS — Base mainnet, transação real, gasta ETH de gas.\n");
-  console.log(`Schema:          "${SIGNAL_SCHEMA}"`);
+  console.log(`Registrando:     ${target.envVar}`);
+  console.log(`Schema:          "${target.schema}"`);
   console.log(`Resolver:        ${zeroAddress} (nenhum — dado puro, sem lógica de validação on-chain)`);
   console.log(`Revocable:       false (atestações futuras registram um fato histórico, não devem ser apagáveis)`);
   console.log(`SchemaRegistry:  ${EAS_BASE_MAINNET.schemaRegistry}`);
@@ -56,7 +64,7 @@ async function main(): Promise<void> {
   const data = encodeFunctionData({
     abi: SCHEMA_REGISTRY_ABI,
     functionName: "register",
-    args: [SIGNAL_SCHEMA, zeroAddress, false],
+    args: [target.schema, zeroAddress, false],
   });
 
   // Mesmo cuidado de cli/withdraw.ts: um erro aqui pode ter acontecido DEPOIS

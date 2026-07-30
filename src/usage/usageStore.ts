@@ -230,6 +230,27 @@ export async function recordUsage(event: UsageEvent, options: RecordOptions = {}
   const fields = usageFields(event);
   try {
     const env = options.env ?? process.env;
+
+    // VARREDURA DE SCANNER NÃO PAGA QUOTA COMPARTILHADA.
+    //
+    // Medido em 30/07: 395 dos 863 eventos do dia eram 404 de varredura
+    // automática (/wp-admin, /.env, /.git). A 5 comandos por evento, esse lixo
+    // sozinho consumiu ~2.000 comandos e ajudou a estourar o teto diário de 800
+    // — a partir do qual a instrumentação para de gravar EM SILÊNCIO e o resto
+    // do dia some. Ou seja: o ruído estava apagando justamente o sinal.
+    //
+    // E o teto não é conservadorismo: este Redis é COMPARTILHADO com o
+    // YieldPilot, cujo estado move dinheiro de verdade. Não dá para simplesmente
+    // subir o limite.
+    //
+    // Scanner é informação de zero valor de negócio e volume ilimitado, então
+    // fica só no contador em memória: continua visível em `/usage.json` como
+    // parcial, sem custar um comando sequer.
+    if (event.kind === "not_found" && event.asset === "noise") {
+      bumpMemory(fields);
+      return false;
+    }
+
     const config = resolveRedisRestConfig(env);
     if (!config) {
       bumpMemory(fields);

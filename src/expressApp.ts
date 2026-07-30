@@ -28,6 +28,7 @@ import { logger } from "./notify/logger.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
 import { recordUsage, readUsage, probeUsageStore } from "./usage/usageStore.js";
 import { usageEntryMiddleware } from "./usage/usageMiddleware.js";
+import { notFoundLabel } from "./usage/notFoundLabel.js";
 import { sendTelegramAlert } from "./notify/telegram.js";
 import { getSignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
@@ -62,23 +63,56 @@ export const DECISION_PATHS: Record<AssetId, string> = {
 };
 
 const DECISION_DESCRIPTIONS: Record<AssetId, string> = {
-  USDC: "Buyer-side MOVE/HOLD decision for USDC lending on Base: given your current position (?position=), size (?amountUsd=), move cost (?moveCostUsd=) and horizon (?horizonDays=), returns whether moving to the best risk-adjusted protocol pays for itself — with expected net gain, break-even days and a confidence tier. Deterministic from the underlying signal (which is EIP-712 signed in the response headers, re-verifiable). Sells the decision, not the raw datapoint.",
+  USDC: "Buyer-side MOVE/HOLD decision for USDC lending on Base: given your position (?position=), size (?amountUsd=), move cost (?moveCostUsd=) and horizon (?horizonDays=), returns whether moving to the best risk-adjusted protocol pays for itself — with expected net gain, break-even days and a confidence tier. Sells the decision, not the raw datapoint.",
   WETH: "Buyer-side MOVE/HOLD decision for WETH lending on Base — same contract as the USDC decision route, for WETH.",
   ETH_STAKING: "Buyer-side MOVE/HOLD decision for ETH liquid staking (Ethereum mainnet) — same contract as the lending decision routes, for ETH staking.",
 };
+
+// LIMITE DURO: `resource.description` do desafio 402 não pode passar de 500
+// caracteres. O facilitador da CDP recusa o pagamento acima disso com um erro
+// que não diz o motivo ("'paymentPayload' is invalid: must match one of
+// [x402V2PaymentPayload, x402V1PaymentPayload]") — o servidor continua servindo
+// 402 normalmente e só o COMPRADOR falha, então a quebra é invisível de dentro.
+// Limite medido por busca binária contra o /verify da CDP em 2026-07-30
+// (500 aceita, 501 recusa); não está documentado em lugar nenhum.
+//
+// Custou caro descobrir: o ACCURACY_POINTER abaixo tinha 248 chars e, ao ser
+// somado a TODA descrição em 2026-07-29, estourou o limite em 4 das 6 rotas de
+// uma vez — inclusive as 3 de sinal, que ficaram sem conseguir receber
+// pagamento sem nenhum sinal de erro. A rota de ETH staking já nascia com 631
+// e nunca tinha conseguido receber um pagamento sequer.
+//
+// `test/routeDescriptionLimit.test.ts` trava isso — não afrouxar o teste.
+export const MAX_DESCRIPTION_CHARS = 500;
 
 // Sufixo comum a TODA descrição de rota — é o texto que o comprador-robô lê no
 // próprio desafio 402 e nos diretórios (Bazaar, trust indexes). Aponta pro
 // score de acurácia POR ASSET em vez de afirmar um número aqui: número escrito
 // à mão numa descrição apodrece e não é verificável, que é o oposto do que este
 // serviço vende. O consumidor compara os assets por conta própria e escolhe.
+// Mantido CURTO de propósito: cada char aqui sai do orçamento das 6 descrições.
 const ACCURACY_POINTER =
-  " Per-asset verified accuracy (within-tolerance hit-rate and average regret in bps, computed from the public on-chain EAS track record) is free at /accuracy.json — compare assets there before paying, and check /track-record for the raw attestations.";
+  " Verified per-asset accuracy is free at /accuracy.json; raw on-chain attestations at /track-record.";
 
 const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
-  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
-  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
-  ETH_STAKING: "Real-time risk-weighted ETH liquid staking APY on Ethereum mainnet: Lido/Rocket Pool/Coinbase Wrapped Staked ETH/Frax Ether/Binance Staked ETH, all via DefiLlama (source tagged per reading, never estimated). Different chain and category from the USDC/WETH lending signals above — this is staking yield, not a Base lending market. Response signed (EIP-712 typed data) by the payment-receiving address — verify via X-Signal-Signature/X-Signal-Signer/X-Signal-Eip712-Payload headers. Same address holds an ERC-8004 agent identity and periodically attests readings on-chain (EAS, Base mainnet) — see /agent-card.json and /track-record.",
+  USDC: "Real-time risk-weighted USDC lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). EIP-712 signed by the payment-receiving address (see X-Signal-* headers), which also holds an ERC-8004 identity and attests readings on-chain via EAS.",
+  WETH: "Real-time risk-weighted WETH lending APY on Base: Aave/Compound/Morpho read onchain, Moonwell/Euler/Fluid via DefiLlama, source tagged per reading (never estimated). EIP-712 signed by the payment-receiving address (see X-Signal-* headers), which also holds an ERC-8004 identity and attests readings on-chain via EAS.",
+  ETH_STAKING: "Real-time risk-weighted ETH liquid staking APY on Ethereum mainnet: Lido/Rocket Pool/Coinbase Wrapped Staked ETH/Frax Ether/Binance Staked ETH via DefiLlama, source tagged per reading (never estimated). Staking yield, not a Base lending market. EIP-712 signed by the payment-receiving address (see X-Signal-* headers).",
+};
+
+/**
+ * Descrição FINAL de cada rota — o texto EXATO que vai no desafio 402.
+ * Fonte única: tanto o registro das rotas abaixo quanto
+ * `test/routeDescriptionLimit.test.ts` leem daqui, pra que o teste meça o mesmo
+ * texto que o comprador recebe em vez de uma cópia que pode divergir.
+ */
+export const FINAL_DESCRIPTIONS: { signal: Record<AssetId, string>; decision: Record<AssetId, string> } = {
+  signal: Object.fromEntries(
+    (Object.keys(ROUTE_DESCRIPTIONS) as AssetId[]).map((a) => [a, ROUTE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
+  ) as Record<AssetId, string>,
+  decision: Object.fromEntries(
+    (Object.keys(DECISION_DESCRIPTIONS) as AssetId[]).map((a) => [a, DECISION_DESCRIPTIONS[a] + ACCURACY_POINTER]),
+  ) as Record<AssetId, string>,
 };
 
 /**
@@ -103,7 +137,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     routes: Object.fromEntries([
       ...(Object.keys(RESOURCE_PATHS) as AssetId[]).map((asset) => [
         `GET ${RESOURCE_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: ROUTE_DESCRIPTIONS[asset] + ACCURACY_POINTER },
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.signal[asset] },
       ]),
       // Rotas de decisão (Camada 1) — preço PREMIUM (DECISION_PRICE_USD, default
       // $0.05 vs $0.01 do sinal cru): a decisão MOVE/HOLD vale mais que o dado
@@ -111,7 +145,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // Mesma fonte de preço usada pela tool MCP get_yield_decision.
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
         `GET ${DECISION_PATHS[asset]}`,
-        { price: env.DECISION_PRICE_USD, description: DECISION_DESCRIPTIONS[asset] + ACCURACY_POINTER },
+        { price: env.DECISION_PRICE_USD, description: FINAL_DESCRIPTIONS.decision[asset] },
       ]),
     ]),
   });
@@ -159,16 +193,28 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // score vem do mesmo caminho de /accuracy.json, atrás de um cache de 10min
   // pra não consultar o EAS a cada visita; se a consulta falhar, a página é
   // servida SEM a seção em vez de com dado velho ou com 5xx.
+
+  // Migração de schema resolvida em UM lugar só: `attestSchemaUid` é onde as
+  // atestações NOVAS são gravadas e `legacySchemaUids` é o que entra JUNTO na
+  // leitura do histórico. Com EAS_SCHEMA_UID_V2 vazio os dois colapsam no v1 e
+  // nada muda; com ele preenchido, o histórico anterior continua aparecendo no
+  // track record público em vez de zerar no dia da virada.
+  const attestSchemaUid = (env.EAS_SCHEMA_UID_V2 || env.EAS_SCHEMA_UID) as `0x${string}`;
+  const attestSchemaVersion: 1 | 2 = env.EAS_SCHEMA_UID_V2 ? 2 : 1;
+  const legacySchemaUids = (env.EAS_SCHEMA_UID_V2 && env.EAS_SCHEMA_UID ? [env.EAS_SCHEMA_UID] : []) as `0x${string}`[];
+  const hasAttestationSchema = Boolean(env.EAS_SCHEMA_UID || env.EAS_SCHEMA_UID_V2);
+
   const cachedAccuracyScore = cachedWithTtl(async () => {
-    if (!env.EAS_SCHEMA_UID) return null;
+    if (!hasAttestationSchema) return null;
     // Uma consulta ao EASScan alimenta as duas métricas da página (direcional e
     // por janela) — o track record reaproveita as atestações já buscadas.
     const attestations = await fetchSignalAttestations({
-      schemaId: env.EAS_SCHEMA_UID as `0x${string}`,
+      schemaId: attestSchemaUid,
+        alsoSchemaIds: legacySchemaUids,
       attester: signer.address,
     });
     const entries = await buildTrackRecord({
-      schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+      schemaUid: attestSchemaUid,
       attester: signer.address,
       attestations,
     });
@@ -225,7 +271,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       res.status(401).json({ error: "unauthorized" });
       return;
     }
-    if (env.X402_ENVIRONMENT !== "production" || !env.EAS_SCHEMA_UID) {
+    if (env.X402_ENVIRONMENT !== "production" || !hasAttestationSchema) {
       res.status(400).json({ error: "auto-attest exige X402_ENVIRONMENT=production e EAS_SCHEMA_UID configurado" });
       return;
     }
@@ -233,7 +279,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       (Object.keys(RESOURCE_PATHS) as AssetId[]).map((asset) =>
         runAutoAttestForAsset(asset, {
           signer,
-          schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+          schemaUid: attestSchemaUid,
           minGasReserveEth: env.MIN_GAS_RESERVE_ETH,
         }),
       ),
@@ -268,12 +314,12 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // trackRecord.ts), sem pagamento e sem banco novo. EAS_SCHEMA_UID vazio
   // degrada pra lista vazia (nada foi atestado ainda), nunca erro 5xx.
   app.get("/track-record.json", async (_req, res) => {
-    if (!env.EAS_SCHEMA_UID) {
+    if (!hasAttestationSchema) {
       res.json({ schemaUid: null, attester: signer.address, entries: [] });
       return;
     }
     try {
-      const entries = await buildTrackRecord({ schemaUid: env.EAS_SCHEMA_UID as `0x${string}`, attester: signer.address });
+      const entries = await buildTrackRecord({ schemaUid: attestSchemaUid, attester: signer.address });
       res.json({ schemaUid: env.EAS_SCHEMA_UID, attester: signer.address, entries });
     } catch (err) {
       logger.error({ err }, "falha montando track record");
@@ -291,7 +337,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // (fonte = EAS, verificável), então não é auto-declarado. EAS_SCHEMA_UID
   // vazio degrada pra score vazio (nada atestado ainda), nunca 5xx.
   app.get("/accuracy.json", async (_req, res) => {
-    if (!env.EAS_SCHEMA_UID) {
+    if (!hasAttestationSchema) {
       res.json({
         schemaUid: null,
         attester: signer.address,
@@ -306,11 +352,12 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // cruzadas com o mercado atual. Buscar duas vezes seria a mesma resposta
       // paga duas vezes.
       const attestations = await fetchSignalAttestations({
-        schemaId: env.EAS_SCHEMA_UID as `0x${string}`,
+        schemaId: attestSchemaUid,
+        alsoSchemaIds: legacySchemaUids,
         attester: signer.address,
       });
       const entries = await buildTrackRecord({
-        schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+        schemaUid: attestSchemaUid,
         attester: signer.address,
         attestations,
       });
@@ -566,8 +613,15 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   app.use(async (req, res) => {
     // Conta caminho errado: se este número for alto perto de `challenged`, o
     // problema de adoção é de descoberta/documentação, não de preço.
+    //
+    // E conta QUAL caminho. A primeira leitura do funil (30/07) mostrou 395
+    // `not_found` contra 456 `challenged` — quase metade do tráfego não achou a
+    // porta — e o número era inacionável, porque ninguém registrava o que estava
+    // sendo tentado. "Agente errando o path do produto" e "scanner procurando
+    // /wp-admin" dão o mesmo contador e pedem reações opostas: a primeira é
+    // alias que falta, a segunda é ruído a ignorar.
     try {
-      await recordUsage({ kind: "not_found", channel: "rest" });
+      await recordUsage({ kind: "not_found", channel: "rest", asset: notFoundLabel(req.path) });
     } catch {
       // Nunca deixa a telemetria transformar um 404 em processo derrubado.
     }

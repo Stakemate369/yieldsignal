@@ -47,18 +47,31 @@ Also available as paid MCP tools at `https://yieldsignal.vercel.app/mcp` — `ge
 
 Every rate is tagged with **where it came from** — `onchain`/`api` (Aave, Compound, Morpho — read directly from the protocol) or `defillama` (Moonwell, Euler, Fluid — via the DefiLlama yields API). No estimated or fabricated numbers: a source that fails or returns invalid data is omitted from the response, never guessed at.
 
+Every rate is also compared on **one explicit basis** (`apyBasis: "supply-apy-total-incl-rewards"`): base interest **plus** incentives. This matters because the raw sources disagree on what "APY" means — an on-chain `liquidityRate`/`getSupplyRate` is base-only, while DefiLlama's aggregate and Morpho's `netApy` already include reward tokens. Ranking them side by side without reconciling that compares different things. Each rate itemizes `apyBaseBps`/`apyRewardBps` where the source separates them, and `rewardBasis` says how the incentive component was obtained (`reported`, `inferred`, `included-not-itemized`, `unavailable`). Any protocol whose incentive could not be established at all is listed in `incompleteRewardData` — its APY is a floor, not a verdict.
+
 ```json
 {
   "asset": "USDC",
   "bestProtocol": "compound",
-  "gapBps": 57,
+  "gapBps": 150,
   "rates": [
-    { "protocol": "compound", "apyBps": 490, "weightedApyBps": 485, "source": "onchain", "asOf": "2026-07-17T..." },
-    { "protocol": "aave", "apyBps": 307, "weightedApyBps": 307, "source": "onchain", "asOf": "..." }
+    { "protocol": "compound", "apyBps": 601, "apyBaseBps": 601, "apyRewardBps": 0, "rewardBasis": "reported", "weightedApyBps": 595, "source": "onchain", "asOf": "2026-07-30T..." },
+    { "protocol": "moonwell", "apyBps": 434, "apyBaseBps": 403, "apyRewardBps": 31, "rewardBasis": "reported", "weightedApyBps": 382, "source": "defillama", "asOf": "..." }
   ],
-  "asOf": "2026-07-17T..."
+  "omittedProtocols": ["euler"],
+  "coverage": { "read": 5, "expected": 6 },
+  "apyBasis": "supply-apy-total-incl-rewards",
+  "incompleteRewardData": [],
+  "asOf": "2026-07-30T..."
 }
 ```
+
+### How long is a signal good for?
+
+`GET /accuracy.json` (free) carries two independent measures, both derived from the public on-chain attestations:
+
+- `score` — directional: was the flagged protocol still the leader (or within 25bps) **when scored against the market right now**.
+- `windowedScore` — each attestation judged over **its own validity window**, i.e. until the next attestation for that asset replaced it. `medianWindowHours` is the practical answer to "how often should I re-check?" and it differs sharply per market: on the record as of 2026-07-30, **13h for ETH liquid staking and WETH lending, 1h for USDC lending on Base**. USDC rotates fast; that is a property of the market, not a defect the endpoint hides.
 
 ## Verifiability
 

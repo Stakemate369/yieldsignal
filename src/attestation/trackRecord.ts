@@ -2,7 +2,7 @@ import { collectRates } from "../signal/collectRates.js";
 import { computeSignal } from "../signal/computeSignal.js";
 import type { YieldSignal } from "../signal/computeSignal.js";
 import type { AssetId, ProtocolId } from "../market-data/types.js";
-import { fetchSignalAttestations } from "./queryAttestations.js";
+import { fetchSignalAttestations, type DecodedSignalAttestation } from "./queryAttestations.js";
 
 export interface TrackRecordEntry {
   uid: `0x${string}`;
@@ -44,8 +44,15 @@ export interface TrackRecordEntry {
 export async function buildTrackRecord(params: {
   schemaUid: `0x${string}`;
   attester: `0x${string}`;
+  /**
+   * Atestações já buscadas por quem chama — evita uma segunda consulta ao
+   * EASScan quando a mesma rota também calcula a acurácia por janela
+   * (windowedAccuracy.ts), que precisa das atestações CRUAS.
+   */
+  attestations?: DecodedSignalAttestation[];
 }): Promise<TrackRecordEntry[]> {
-  const attestations = await fetchSignalAttestations({ schemaId: params.schemaUid, attester: params.attester });
+  const attestations =
+    params.attestations ?? (await fetchSignalAttestations({ schemaId: params.schemaUid, attester: params.attester }));
   const assets = Array.from(new Set(attestations.map((a) => a.asset)));
 
   const currentSignals = new Map<AssetId, YieldSignal | null>();

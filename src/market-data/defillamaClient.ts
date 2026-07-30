@@ -8,6 +8,10 @@ export interface DefiLlamaPool {
   chain: string;
   symbol: string;
   apy: number | null;
+  /** Componente de juro base (%). Pode vir `null` mesmo com `apy` preenchido — ver readingFromPool. */
+  apyBase?: number | null;
+  /** Componente de incentivo (%). `null` = a DefiLlama não separa pra este pool; `0` = sabidamente sem incentivo. */
+  apyReward?: number | null;
   tvlUsd: number;
 }
 
@@ -76,23 +80,64 @@ export function matchDefiLlamaPool(
   );
 }
 
+/** Converte um campo de porcentagem da DefiLlama em bps, ou `null` se não for número utilizável. */
+function pctToBps(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.round(value * 100) : null;
+}
+
 /**
- * Valida um pool já casado (apy finito, TVL acima do piso) e monta o
- * RateReading — mesma sequência de checagem que defillamaPools.ts e
+ * Decompõe a APY de um pool nos componentes que o serviço compara.
+ *
+ * Prefere `apyBase + apyReward` ao campo agregado `apy` porque os três nem
+ * sempre são coerentes na fonte: visto ao vivo em 2026-07-30, o pool WETH da
+ * compound-v3 na Base vinha com `apy: 0` e `apyBase: null` (agregado zerado,
+ * componente ausente), e vários pools trazem `apyReward` preenchido com `apy`
+ * já somado. Só cai no agregado quando NENHUM componente veio.
+ */
+export function splitPoolApy(pool: DefiLlamaPool): { totalBps: number; baseBps: number | null; rewardBps: number | null } | null {
+  const baseBps = pctToBps(pool.apyBase);
+  const rewardBps = pctToBps(pool.apyReward);
+  if (baseBps === null && rewardBps === null) {
+    const aggregate = pctToBps(pool.apy);
+    return aggregate === null ? null : { totalBps: aggregate, baseBps: null, rewardBps: null };
+  }
+  return { totalBps: (baseBps ?? 0) + (rewardBps ?? 0), baseBps, rewardBps };
+}
+
+/**
+ * Valida um pool já casado (APY decomponível e não-nula, TVL acima do piso) e
+ * monta o RateReading — mesma sequência de checagem que defillamaPools.ts e
  * ethStaking.ts precisam fazer, extraída pra não duplicar warn+null em
  * cada uma. `logContext` só entra no log, não afeta a validação.
+ *
+ * APY total <= 0 é tratada como leitura INDISPONÍVEL, não como "0% de verdade":
+ * achado real em 2026-07-30 — o pool da Euler que o serviço lê pra USDC
+ * ("Clearstar Earn USDC", TVL $463k, acima do piso) reportava `apy: 0` havia
+ * tempo, e o guarda antigo (só `null`/NaN) deixava passar. Resultado: toda
+ * resposta de USDC anunciava `coverage: 6/6` carregando um protocolo mudo como
+ * se fosse leitura boa. Um mercado de lending vivo não paga 0,00% — quando paga,
+ * é dado quebrado ou pool morto, e omitir (aparecendo em `omittedProtocols`) é
+ * mais honesto que ranquear um zero.
  */
 export function readingFromPool<T extends { protocol: string; asset: string }>(
   match: DefiLlamaPool | undefined,
   build: (match: DefiLlamaPool) => T,
   logContext: Record<string, unknown>,
-): (T & { supplyApyBps: number; source: "defillama"; readAt: Date }) | null {
+): (T & { supplyApyBps: number; apyBaseBps: number | null; apyRewardBps: number | null; rewardBasis: "reported" | "included-not-itemized"; source: "defillama"; readAt: Date }) | null {
   if (!match) {
     logger.warn(logContext, "pool não encontrado (ou não bate mais poolId/project/chain/symbol) na resposta atual da DefiLlama — omitindo desta vez");
     return null;
   }
-  if (typeof match.apy !== "number" || !Number.isFinite(match.apy)) {
+  const split = splitPoolApy(match);
+  if (split === null) {
     logger.warn({ ...logContext, apy: match.apy }, "DefiLlama retornou apy nulo/inválido — omitindo em vez de reportar 0%");
+    return null;
+  }
+  if (split.totalBps <= 0) {
+    logger.warn(
+      { ...logContext, apy: match.apy, apyBase: match.apyBase, apyReward: match.apyReward, tvlUsd: match.tvlUsd },
+      "DefiLlama reportou APY total <= 0 — tratando como pool mudo/morto e omitindo (entra em omittedProtocols)",
+    );
     return null;
   }
   if (match.tvlUsd < MIN_POOL_TVL_USD) {
@@ -101,7 +146,13 @@ export function readingFromPool<T extends { protocol: string; asset: string }>(
   }
   return {
     ...build(match),
-    supplyApyBps: Math.round(match.apy * 100),
+    supplyApyBps: split.totalBps,
+    apyBaseBps: split.baseBps,
+    apyRewardBps: split.rewardBps,
+    // A DefiLlama entrega o agregado já com incentivo; quando só o agregado
+    // existe (componentes null) ele continua sendo base+reward por definição
+    // da fonte, então o total é comparável — só não dá pra itemizar.
+    rewardBasis: split.rewardBps === null ? ("included-not-itemized" as const) : ("reported" as const),
     source: "defillama",
     readAt: new Date(),
   };

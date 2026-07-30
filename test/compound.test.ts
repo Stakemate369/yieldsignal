@@ -17,6 +17,14 @@ function mockUtilizationAndSupplyRate(supplyRatePerSecond: bigint): void {
 beforeEach(async () => {
   vi.resetModules();
   readContractMock = vi.fn();
+  // Sem rede no teste: o leitor on-chain agora consulta o componente de
+  // incentivo (incentives.ts -> DefiLlama). Sem este mock a suíte faria fetch
+  // REAL — foi o que aconteceu na primeira execução desta mudança, e o dado ao
+  // vivo chegou a inverter um assert. Mesma classe de problema que travou o
+  // gate do PR no elizaOS: chamada de rede escondida dentro de teste unitário.
+  vi.doMock("../src/market-data/incentives.js", () => ({
+    readIncentiveComponent: async () => ({ rewardBps: null, basis: "unavailable" }),
+  }));
   vi.doMock("../src/market-data/client.js", () => ({
     basePublicClient: { readContract: readContractMock },
   }));

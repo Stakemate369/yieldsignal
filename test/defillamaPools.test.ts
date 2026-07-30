@@ -93,4 +93,37 @@ describe("readDefiLlamaPoolApy", () => {
     const reading = await readDefiLlamaPoolApy("fluid", "WETH");
     expect(reading).toBeNull();
   });
+
+  // Bug real (2026-07-30): o pool da Euler que o serviço lê pra USDC reportava
+  // apy 0 com TVL de $463k — acima do piso —, e o guarda antigo só barrava
+  // null/NaN. Toda resposta de USDC anunciava cobertura 6/6 carregando um
+  // protocolo mudo. Mercado de lending vivo não paga 0,00%.
+  it("omite quando a APY total é zero — pool mudo/morto não vira leitura de 0%", async () => {
+    mockPoolsResponse([{ ...FLUID_POOL, apy: 0, apyBase: 0, apyReward: null }]);
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
+    expect(reading).toBeNull();
+  });
+
+  it("soma juro base e incentivo em vez de confiar no agregado, e itemiza os dois", async () => {
+    mockPoolsResponse([{ ...FLUID_POOL, apy: 4.02, apyBase: 4.02, apyReward: 0.31 }]);
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
+    expect(reading?.supplyApyBps).toBe(433);
+    expect(reading?.apyBaseBps).toBe(402);
+    expect(reading?.apyRewardBps).toBe(31);
+    expect(reading?.rewardBasis).toBe("reported");
+  });
+
+  it("cai no agregado quando a fonte não traz nenhum componente — e marca que não dá pra itemizar", async () => {
+    mockPoolsResponse([{ ...FLUID_POOL, apy: 5.03, apyBase: null, apyReward: null }]);
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
+    expect(reading?.supplyApyBps).toBe(503);
+    expect(reading?.apyBaseBps).toBeNull();
+    expect(reading?.rewardBasis).toBe("included-not-itemized");
+  });
+
+  it("usa os componentes mesmo quando o agregado está quebrado (apy: 0 com apyBase preenchido) — visto ao vivo na compound-v3", async () => {
+    mockPoolsResponse([{ ...FLUID_POOL, apy: 0, apyBase: 1.22, apyReward: 0 }]);
+    const reading = await readDefiLlamaPoolApy("fluid", "USDC");
+    expect(reading?.supplyApyBps).toBe(122);
+  });
 });

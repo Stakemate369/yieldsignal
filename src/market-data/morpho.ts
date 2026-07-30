@@ -69,6 +69,13 @@ async function readMorphoVaultApyUncached(asset: LendingAssetId): Promise<RateRe
     protocol: "morpho",
     asset,
     supplyApyBps: Math.round(netApy * 10_000),
+    // `netApy` já vem líquido de taxa e COM rewards, mas a API não devolve os
+    // componentes separados nesta query — itemizar exigiria pedir os campos de
+    // reward por mercado alocado e recompor, exatamente o cálculo que o
+    // comentário acima diz pra não reimplementar.
+    apyBaseBps: null,
+    apyRewardBps: null,
+    rewardBasis: "included-not-itemized",
     source: "api",
     readAt: new Date(),
   };

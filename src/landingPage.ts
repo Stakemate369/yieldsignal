@@ -1,4 +1,5 @@
 import type { AccuracyScore, AccuracyBreakdown } from "./attestation/accuracyScore.js";
+import type { WindowedAccuracy } from "./attestation/windowedAccuracy.js";
 import type { AssetId } from "./market-data/types.js";
 import { FLAGSHIP_ASSET } from "./market-data/types.js";
 
@@ -19,6 +20,12 @@ import { FLAGSHIP_ASSET } from "./market-data/types.js";
 export interface LandingPageParams {
   /** null quando o score não pôde ser lido nesta requisição — a seção é omitida. */
   score: AccuracyScore | null;
+  /**
+   * Acurácia por janela de vigência. Opcional de propósito: a página continua
+   * completa sem ela (a coluna some), então uma falha nova nunca derruba a
+   * entrada do serviço.
+   */
+  windowed?: WindowedAccuracy | null;
   signalPrice: string;
   decisionPrice: string;
 }
@@ -73,12 +80,20 @@ export function rankAssetsByAccuracy(score: AccuracyScore): AccuracyBreakdown[] 
     });
 }
 
-function accuracySection(score: AccuracyScore | null): string {
+/** "13" -> "13h", "1" -> "1h", null -> "—". Meia hora vira "0.5h" (não arredonda pra zero). */
+function hours(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return `${value % 1 === 0 ? value : value.toFixed(1)}h`;
+}
+
+function accuracySection(score: AccuracyScore | null, windowed?: WindowedAccuracy | null): string {
   if (!score || score.perAsset.length === 0) {
     return `<p><strong>Proven, not promised.</strong> Machine-readable accuracy at <a href="/accuracy.json"><code>/accuracy.json</code></a>, computed 1:1 from the public on-chain EAS track record — a paying agent can check the record before deciding to trust the signal.</p>`;
   }
 
   const ranked = rankAssetsByAccuracy(score);
+  const windowByAsset = new Map((windowed?.perAsset ?? []).map((w) => [w.asset, w]));
+  const showWindow = windowByAsset.size > 0;
   const rows = ranked
     .map((a) => {
       const assetId = escapeHtml(String(a.asset));
@@ -87,7 +102,9 @@ function accuracySection(score: AccuracyScore | null): string {
       const name = route
         ? `<a href="${route}"><code>${assetId}</code></a> — ${label}`
         : `<code>${assetId}</code> — ${label}`;
-      return `<tr><td>${name}</td><td>${pct(a.withinToleranceRate)}</td><td>${a.avgRegretBps ?? "—"} bps</td><td>${a.regretScored || a.scored}</td></tr>`;
+      const window = windowByAsset.get(a.asset);
+      const windowCell = showWindow ? `<td>${hours(window?.medianWindowHours ?? null)}</td>` : "";
+      return `<tr><td>${name}</td><td>${pct(a.withinToleranceRate)}</td><td>${a.avgRegretBps ?? "—"} bps</td>${windowCell}<td>${a.regretScored || a.scored}</td></tr>`;
     })
     .join("\n  ");
 
@@ -104,16 +121,25 @@ function accuracySection(score: AccuracyScore | null): string {
   return `<h2>Proven, not promised</h2>
 <p>${headline} Every number below is recomputed from the public <a href="/track-record">EAS track record</a> on each page load — nothing here is a hand-written claim. Machine-readable at <a href="/accuracy.json"><code>/accuracy.json</code></a>.</p>
 <table>
-  <thead><tr><th>Asset</th><th>Within ${score.toleranceBps}bps of the leader</th><th>Avg regret</th><th>Attestations scored</th></tr></thead>
+  <thead><tr><th>Asset</th><th>Within ${score.toleranceBps}bps of the leader</th><th>Avg regret</th>${showWindow ? "<th>Median time on top</th>" : ""}<th>Attestations scored</th></tr></thead>
   <tbody>
   ${rows}
   </tbody>
 </table>
-<p class="note">“Within tolerance” asks: when we flagged a protocol, was it still the leader — or at most ${score.toleranceBps}bps behind it — when scored against the current market? Regret is how many bps behind the current leader the flagged protocol sits, on average. Both are directional (<code>basis: ${score.basis}</code>), not a historical backtest, and the endpoint says so.</p>`;
+<p class="note">“Within tolerance” asks: when we flagged a protocol, was it still the leader — or at most ${score.toleranceBps}bps behind it — when scored against the current market? Regret is how many bps behind the current leader the flagged protocol sits, on average. Both are directional (<code>basis: ${score.basis}</code>), not a historical backtest, and the endpoint says so.</p>${
+    showWindow
+      ? `
+<p class="note"><strong>Median time on top</strong> is how long a call actually stayed the leader before the next attestation replaced it — measured over each signal's own validity window, so a fast-rotating market is not judged against a market weeks later. It is also the practical answer to “how often should I re-check?”: ${hours(
+          windowByAsset.get("USDC")?.medianWindowHours ?? null,
+        )} for USDC lending against ${hours(
+          windowByAsset.get(FLAGSHIP_ASSET)?.medianWindowHours ?? null,
+        )} for ${escapeHtml(ASSET_LABELS[FLAGSHIP_ASSET])}. Machine-readable under <code>windowedScore</code> in <a href="/accuracy.json"><code>/accuracy.json</code></a>.</p>`
+      : ""
+  }`;
 }
 
 export function renderLandingPage(params: LandingPageParams): string {
-  const { score, signalPrice, decisionPrice } = params;
+  const { score, windowed, signalPrice, decisionPrice } = params;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -143,7 +169,7 @@ export function renderLandingPage(params: LandingPageParams): string {
 
 <p><span class="badge">${signalPrice}/call signal</span><span class="badge">${decisionPrice}/call decision</span><span class="badge">3 free/day per IP via ?trial=1</span><span class="badge">signed + on-chain track record</span></p>
 
-${accuracySection(score)}
+${accuracySection(score, windowed)}
 
 <h2>REST</h2>
 <pre>GET https://yieldsignal.vercel.app${ASSET_ROUTES.ETH_STAKING}

@@ -2,6 +2,7 @@ import { BASE_MAINNET, BASE_ASSETS } from "../config/networks.js";
 import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
+import { readIncentiveComponent } from "./incentives.js";
 import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -41,13 +42,19 @@ async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateRea
   });
 
   const liquidityRate = data[5]; // liquidityRate é o 6º valor do tuple
-  // liquidityRate vem em ray (1e27), como APR linear anualizado.
+  // liquidityRate vem em ray (1e27), como APR linear anualizado. É SÓ o juro
+  // base — incentivo da Aave é pago pelo RewardsController, fora desta leitura.
   const aprFraction = Number(liquidityRate) / Number(RAY);
+  const apyBaseBps = compoundedRateToApyBps(aprFraction, false);
+  const incentive = await readIncentiveComponent("aave", asset, apyBaseBps);
 
   return {
     protocol: "aave",
     asset,
-    supplyApyBps: compoundedRateToApyBps(aprFraction, false),
+    supplyApyBps: apyBaseBps + (incentive.rewardBps ?? 0),
+    apyBaseBps,
+    apyRewardBps: incentive.rewardBps,
+    rewardBasis: incentive.basis,
     source: "onchain",
     readAt: new Date(),
   };

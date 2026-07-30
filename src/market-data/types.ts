@@ -68,11 +68,48 @@ export const ASSET_IDS = ["ETH_STAKING", "USDC", "WETH"] as const satisfies read
  */
 export const FLAGSHIP_ASSET: AssetId = "ETH_STAKING";
 
+/**
+ * Definição ÚNICA de APY que o serviço compara entre protocolos: juro base MAIS
+ * incentivo (reward token), líquido de taxa do próprio protocolo quando a fonte
+ * já entrega assim.
+ *
+ * Existe porque a comparação estava misturando definições — achado real em
+ * 2026-07-30 e a causa mais provável da acurácia baixa em USDC: Aave e Compound
+ * eram lidos on-chain (`liquidityRate`/`getSupplyRate` = SÓ juro base, sem
+ * incentivo), enquanto Morpho (`netApy` da API oficial) e a Camada 2 (campo
+ * `apy` da DefiLlama = base + reward) já vinham COM incentivo embutido. Num
+ * mercado onde o incentivo é parte relevante do retorno (Moonwell paga WELL,
+ * Euler paga rEUL — na leitura de 2026-07-30 o reward era 1,73 de 2,92 pontos
+ * da APY de WETH na Euler), isso é comparar coisas diferentes e ranquear errado.
+ */
+export const APY_BASIS = "supply-apy-total-incl-rewards" as const;
+
 export interface RateReading {
   protocol: ProtocolId;
   asset: AssetId;
-  /** APY de supply em basis points (1% = 100 bps), já líquido de taxa do próprio protocolo quando aplicável. */
+  /** APY de supply TOTAL em basis points (1% = 100 bps) — ver APY_BASIS. É o número usado no ranking. */
   supplyApyBps: number;
+  /** Componente de juro base (bps). `null` = a fonte não separa os componentes (não significa zero). */
+  apyBaseBps: number | null;
+  /**
+   * Componente de incentivo (bps). Distinção que importa pro consumidor máquina:
+   * `0` = sabidamente sem incentivo agora; `null` = desconhecido nesta leitura
+   * (a fonte não expõe, ou a consulta do componente falhou) — nesse caso
+   * `supplyApyBps` pode estar SUBESTIMADO e o comprador precisa saber.
+   */
+  apyRewardBps: number | null;
+  /**
+   * De onde saiu o componente de incentivo — o comprador máquina precisa poder
+   * pesar a força da afirmação, não só o número:
+   * - `reported`: a fonte informou o componente separadamente.
+   * - `inferred`: o agregado da fonte ficou materialmente acima do juro base
+   *   lido on-chain e a diferença foi atribuída a incentivo.
+   * - `included-not-itemized`: a fonte já entrega tudo somado e não separa
+   *   (caso do `netApy` do Morpho).
+   * - `unavailable`: nenhum dado de incentivo — `supplyApyBps` é base-only e
+   *   PODE ESTAR SUBESTIMADO se houver campanha ativa.
+   */
+  rewardBasis: "reported" | "inferred" | "included-not-itemized" | "unavailable";
   source: "onchain" | "api" | "defillama";
   readAt: Date;
 }

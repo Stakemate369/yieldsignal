@@ -110,6 +110,47 @@ describe("renderLandingPage", () => {
     expect(html).not.toContain("Strongest verified record");
   });
 
+  it("mostra a coluna de tempo mediano no topo quando a métrica por janela chega", () => {
+    const html = renderLandingPage({
+      ...params,
+      score: score([breakdown({ asset: "USDC", withinToleranceRate: 0.4, avgRegretBps: 94, regretScored: 78 })]),
+      windowed: {
+        basis: "held-through-own-validity-window",
+        closedWindows: 77,
+        held: 18,
+        heldRate: 0.23,
+        timeWeightedHeldRate: 0.2,
+        medianWindowHours: 1,
+        openWindows: 1,
+        perAsset: [
+          {
+            asset: "USDC",
+            closedWindows: 77,
+            held: 18,
+            heldRate: 0.23,
+            timeWeightedHeldRate: 0.2,
+            medianWindowHours: 1,
+            totalWindowHours: 133,
+          },
+        ],
+        computedAt: "2026-07-30T18:00:00.000Z",
+      },
+    });
+    expect(html).toContain("Median time on top");
+    expect(html).toContain("1h");
+  });
+
+  // A página é o cartão de visita: uma métrica nova que falhe não pode tirar a
+  // tabela do ar nem inventar um valor no lugar.
+  it("sem a métrica por janela, a tabela continua completa e a coluna simplesmente some", () => {
+    const html = renderLandingPage({
+      ...params,
+      score: score([breakdown({ asset: "USDC", withinToleranceRate: 0.4, avgRegretBps: 94, regretScored: 78 })]),
+    });
+    expect(html).toContain("94 bps");
+    expect(html).not.toContain("Median time on top");
+  });
+
   it("lidera com o asset de vitrine e cita os aliases sem asset", () => {
     const html = renderLandingPage({ ...params, score: null });
     expect(html).toContain("eth-staking-yield");

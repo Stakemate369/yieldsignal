@@ -65,7 +65,14 @@ export function confidenceFor(rates: SignalRate[]): Confidence {
   const gapToSecond = second ? best.weightedApyBps - second.weightedApyBps : best.weightedApyBps;
   const directSource = best.source === "onchain" || best.source === "api";
 
-  if (gapToSecond >= 50 && directSource) return "high";
+  // (3) Incentivo desconhecido em algum CONCORRENTE derruba a confiança do teto:
+  // a APY dele é base-only, então é um PISO — se houver campanha ativa que a
+  // fonte não separou, o ranking pode estar invertido e não dá pra saber por
+  // quanto. No líder isso não incomoda (subestimar o líder não tira a liderança
+  // dele), por isso a checagem é só nos demais.
+  const challengerRewardUnknown = rates.slice(1).some((r) => r.rewardBasis === "unavailable");
+
+  if (gapToSecond >= 50 && directSource && !challengerRewardUnknown) return "high";
   if (gapToSecond >= 20) return "medium";
   return "low";
 }

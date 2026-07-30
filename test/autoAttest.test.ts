@@ -8,9 +8,11 @@ function signal(overrides: Partial<YieldSignal> = {}): YieldSignal {
     asset: "USDC",
     bestProtocol: "compound",
     gapBps: 50,
-    rates: [{ protocol: "compound", apyBps: 500, weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" }],
+    rates: [{ protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" }],
     omittedProtocols: [],
     coverage: { read: 1, expected: 1 },
+    apyBasis: "supply-apy-total-incl-rewards",
+    incompleteRewardData: [],
     asOf: "2026-07-17T12:00:00.000Z",
     ...overrides,
   };
@@ -49,14 +51,48 @@ describe("decideAutoAttest", () => {
     expect(decision.reason).toMatch(/melhor protocolo mudou/);
   });
 
-  it("atesta se o gap mudou mais que o limiar (25 bps)", () => {
+  it("atesta se o gap mudou mais que o limiar do asset (USDC: 75 bps)", () => {
     const decision = decideAutoAttest({
-      signal: signal({ gapBps: 80 }),
+      signal: signal({ gapBps: 130 }),
       lastAttestation: attestation({ gapBps: 50 }),
       now: NOW,
     });
     expect(decision.shouldAttest).toBe(true);
     expect(decision.reason).toMatch(/gap mudou/);
+  });
+
+  // USDC oscila com utilização hora a hora — 25 bps ali é ruído, e cada disparo
+  // publicava uma atestação a mais (78 de USDC contra 11 de WETH em 100).
+  it("USDC tem limiar de gap mais alto que os assets pegajosos — 30 bps não atesta em USDC...", () => {
+    const decision = decideAutoAttest({
+      signal: signal({ asset: "USDC", gapBps: 80 }),
+      lastAttestation: attestation({ asset: "USDC", gapBps: 50 }),
+      now: NOW,
+    });
+    expect(decision.shouldAttest).toBe(false);
+  });
+
+  it("...mas atesta em ETH_STAKING, onde um movimento desse tamanho é sinal de verdade", () => {
+    const decision = decideAutoAttest({
+      signal: signal({ asset: "ETH_STAKING", bestProtocol: "lido", gapBps: 80 }),
+      lastAttestation: attestation({ asset: "ETH_STAKING", bestProtocol: "lido", gapBps: 50 }),
+      now: NOW,
+    });
+    expect(decision.shouldAttest).toBe(true);
+    expect(decision.reason).toMatch(/gap mudou/);
+  });
+
+  // O limiar mais alto NÃO pode virar desculpa pra não registrar mudança real:
+  // a troca de líder é o que o comprador compra, e a atestação tem que bater
+  // com o que /signal entrega naquele instante.
+  it("troca de líder atesta mesmo com o gap dentro do limiar mais alto do USDC", () => {
+    const decision = decideAutoAttest({
+      signal: signal({ asset: "USDC", bestProtocol: "morpho", gapBps: 52 }),
+      lastAttestation: attestation({ asset: "USDC", bestProtocol: "compound", gapBps: 50 }),
+      now: NOW,
+    });
+    expect(decision.shouldAttest).toBe(true);
+    expect(decision.reason).toMatch(/melhor protocolo mudou/);
   });
 
   it("NÃO atesta se o gap mudou menos que o limiar", () => {

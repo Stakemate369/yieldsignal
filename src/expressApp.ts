@@ -15,6 +15,8 @@ import { computeSignal } from "./signal/computeSignal.js";
 import { decideMove } from "./signal/decideMove.js";
 import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
 import { computeAccuracyScore } from "./attestation/accuracyScore.js";
+import { computeWindowedAccuracy } from "./attestation/windowedAccuracy.js";
+import { fetchSignalAttestations } from "./attestation/queryAttestations.js";
 import { GUARANTEE_TERMS } from "./guarantee/terms.js";
 import type { AssetId } from "./market-data/types.js";
 import { FLAGSHIP_ASSET } from "./market-data/types.js";
@@ -159,11 +161,18 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // servida SEM a seção em vez de com dado velho ou com 5xx.
   const cachedAccuracyScore = cachedWithTtl(async () => {
     if (!env.EAS_SCHEMA_UID) return null;
+    // Uma consulta ao EASScan alimenta as duas métricas da página (direcional e
+    // por janela) — o track record reaproveita as atestações já buscadas.
+    const attestations = await fetchSignalAttestations({
+      schemaId: env.EAS_SCHEMA_UID as `0x${string}`,
+      attester: signer.address,
+    });
     const entries = await buildTrackRecord({
       schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
       attester: signer.address,
+      attestations,
     });
-    return computeAccuracyScore(entries);
+    return { score: computeAccuracyScore(entries), windowed: computeWindowedAccuracy(attestations) };
   }, 10 * 60 * 1000);
 
   // Handler assíncrono precisa capturar TUDO por dentro: Express 4 não trata
@@ -171,16 +180,21 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // inteiro (não existe processGuards neste repo). Vale pra toda rota async
   // adicionada aqui.
   app.get("/", async (_req, res) => {
-    let score: Awaited<ReturnType<typeof cachedAccuracyScore>> = null;
+    let accuracy: Awaited<ReturnType<typeof cachedAccuracyScore>> = null;
     try {
-      score = await cachedAccuracyScore();
+      accuracy = await cachedAccuracyScore();
     } catch (err) {
       logger.warn({ err }, "não deu pra ler o score de acurácia pra página inicial — servindo sem a seção");
     }
     try {
-      res
-        .type("html")
-        .send(renderLandingPage({ score, signalPrice: env.PRICE_USD, decisionPrice: env.DECISION_PRICE_USD }));
+      res.type("html").send(
+        renderLandingPage({
+          score: accuracy?.score ?? null,
+          windowed: accuracy?.windowed ?? null,
+          signalPrice: env.PRICE_USD,
+          decisionPrice: env.DECISION_PRICE_USD,
+        }),
+      );
     } catch (err) {
       // Score em formato inesperado não pode virar 5xx na página de entrada:
       // degrada pro cartão de visita mínimo, sem a seção de acurácia.
@@ -278,12 +292,37 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // vazio degrada pra score vazio (nada atestado ainda), nunca 5xx.
   app.get("/accuracy.json", async (_req, res) => {
     if (!env.EAS_SCHEMA_UID) {
-      res.json({ schemaUid: null, attester: signer.address, score: computeAccuracyScore([]) });
+      res.json({
+        schemaUid: null,
+        attester: signer.address,
+        score: computeAccuracyScore([]),
+        windowedScore: computeWindowedAccuracy([]),
+      });
       return;
     }
     try {
-      const entries = await buildTrackRecord({ schemaUid: env.EAS_SCHEMA_UID as `0x${string}`, attester: signer.address });
-      res.json({ schemaUid: env.EAS_SCHEMA_UID, attester: signer.address, score: computeAccuracyScore(entries) });
+      // Uma consulta ao EASScan só: o score por janela precisa das atestações
+      // CRUAS (ordem/instante), o score direcional precisa das entradas já
+      // cruzadas com o mercado atual. Buscar duas vezes seria a mesma resposta
+      // paga duas vezes.
+      const attestations = await fetchSignalAttestations({
+        schemaId: env.EAS_SCHEMA_UID as `0x${string}`,
+        attester: signer.address,
+      });
+      const entries = await buildTrackRecord({
+        schemaUid: env.EAS_SCHEMA_UID as `0x${string}`,
+        attester: signer.address,
+        attestations,
+      });
+      res.json({
+        schemaUid: env.EAS_SCHEMA_UID,
+        attester: signer.address,
+        score: computeAccuracyScore(entries),
+        // Métrica por janela de vigência — ver windowedAccuracy.ts pro porquê
+        // de ela ser mais justa que a direccional-contra-mercado-atual, que
+        // penaliza duas vezes o ativo mais volátil.
+        windowedScore: computeWindowedAccuracy(attestations),
+      });
     } catch (err) {
       logger.error({ err }, "falha calculando accuracy score");
       res.status(503).json({ error: "falha temporária consultando o histórico — tente de novo em instantes" });

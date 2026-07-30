@@ -15,6 +15,36 @@ import { logger } from "../notify/logger.js";
 const GAP_CHANGE_THRESHOLD_BPS = 25;
 const MAX_STALENESS_MS = 12 * 60 * 60 * 1000;
 
+/**
+ * Limiar POR ASSET pra mudança de gap. Medido em 2026-07-30 sobre 100
+ * atestações reais: USDC tinha 78 delas contra 11 de WETH e 11 de ETH_STAKING.
+ * O gatilho de gap dispara mesmo com o líder INALTERADO — num mercado que
+ * oscila com utilização hora a hora (lending de USDC na Base), 25 bps é ruído,
+ * e cada disparo publicava uma atestação a mais no histórico, todas depois
+ * julgadas contra o mercado do momento da consulta.
+ *
+ * Não é maquiagem de métrica: atestar ruído também gasta gas e polui o registro
+ * público com "mudanças" que não mudam a decisão de ninguém — o gap muda, o
+ * protocolo recomendado é o mesmo. Assets pegajosos (staking, WETH) seguem em
+ * 25 bps porque neles um movimento desse tamanho é sinal de verdade.
+ */
+const GAP_CHANGE_THRESHOLD_BPS_BY_ASSET: Partial<Record<AssetId, number>> = {
+  USDC: 75,
+};
+
+/**
+ * MUDANÇA DE LÍDER NUNCA É SUPRIMIDA, de propósito: a atestação é o registro
+ * público do que o serviço ESTÁ vendendo, e `/signal` responde o estado real do
+ * mercado naquele instante. Aplicar histerese só aqui faria o registro on-chain
+ * apontar um protocolo diferente do que a resposta paga entrega — o histórico
+ * deixaria de ser prova do produto. A histerese econômica (vale a pena trocar,
+ * dado custo e horizonte) fica onde ela custa dinheiro de verdade ao comprador:
+ * em signal/decideMove.ts, que já exige o ganho superar o break-even.
+ */
+function gapThresholdFor(asset: AssetId): number {
+  return GAP_CHANGE_THRESHOLD_BPS_BY_ASSET[asset] ?? GAP_CHANGE_THRESHOLD_BPS;
+}
+
 export interface AutoAttestDecision {
   shouldAttest: boolean;
   reason: string;
@@ -41,9 +71,10 @@ export function decideAutoAttest(params: {
       reason: `melhor protocolo mudou (${lastAttestation.bestProtocol} -> ${signal.bestProtocol})`,
     };
   }
+  const gapThresholdBps = gapThresholdFor(signal.asset);
   const gapDelta = Math.abs(lastAttestation.gapBps - signal.gapBps);
-  if (gapDelta >= GAP_CHANGE_THRESHOLD_BPS) {
-    return { shouldAttest: true, reason: `gap mudou ${gapDelta} bps (limiar ${GAP_CHANGE_THRESHOLD_BPS} bps)` };
+  if (gapDelta >= gapThresholdBps) {
+    return { shouldAttest: true, reason: `gap mudou ${gapDelta} bps (limiar ${gapThresholdBps} bps para ${signal.asset})` };
   }
   const ageMs = now.getTime() - lastAttestation.time * 1000;
   if (ageMs >= MAX_STALENESS_MS) {

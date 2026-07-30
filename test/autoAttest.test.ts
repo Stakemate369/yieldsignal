@@ -8,7 +8,7 @@ function signal(overrides: Partial<YieldSignal> = {}): YieldSignal {
     asset: "USDC",
     bestProtocol: "compound",
     gapBps: 50,
-    rates: [{ protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" }],
+    rates: [{ protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" }],
     omittedProtocols: [],
     coverage: { read: 1, expected: 1 },
     apyBasis: "supply-apy-total-incl-rewards",

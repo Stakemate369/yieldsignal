@@ -10,8 +10,8 @@ function signal(overrides: Partial<YieldSignal> = {}): YieldSignal {
     bestProtocol: "compound",
     gapBps: 57,
     rates: [
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" },
-      { protocol: "moonwell", apyBps: 440, apyBaseBps: 440, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 438, source: "defillama", asOf: "2026-07-17T12:00:00.000Z" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "2026-07-17T12:00:00.000Z" },
+      { protocol: "moonwell", apyBps: 440, apyBaseBps: 440, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 438, source: "defillama", asOf: "2026-07-17T12:00:00.000Z" },
     ],
     omittedProtocols: [],
     coverage: { read: 2, expected: 2 },

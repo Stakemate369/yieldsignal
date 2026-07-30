@@ -14,7 +14,9 @@ import "dotenv/config";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { wrapFetchWithPayment } from "@x402/fetch";
 
-const URL = "https://yieldsignal.vercel.app/signal/eth-staking-yield";
+// Rota alvo: passe o path como argumento, ou usa a vitrine por padrão.
+//   node scripts/indexMissingRoutes.mjs /decision/weth-base-yield
+const URL = "https://yieldsignal.vercel.app" + (process.argv[2] ?? "/signal/eth-staking-yield");
 
 /** O motivo da recusa vem no header `Payment-Required` (base64), campo `error`. */
 function motivoDoRecusado(res) {
@@ -31,7 +33,17 @@ function motivoDoRecusado(res) {
 const client = new CdpX402Client();
 const { evmAddress } = await client.getAddresses();
 console.log("pagando a partir de:", evmAddress);
-console.log("custo: 0,01 USDC\n");
+
+// Preço lido do próprio desafio — não fixar à mão aqui: as rotas de sinal
+// custam 0,01 e as de decisão 0,05, e um número escrito no script mente
+// silenciosamente quando você aponta pra outra rota.
+{
+  const h = (await fetch(URL)).headers.get("payment-required");
+  const j = JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+  const evm = j.accepts.find((a) => String(a.network).startsWith("eip155"));
+  console.log(`rota: ${URL}`);
+  console.log(`custo: ${Number(evm.amount) / 1e6} USDC\n`);
+}
 
 // Aquece a função primeiro, de graça, pra que a chamada paga não caia num
 // cold start — que é a causa mais provável da falha anterior.

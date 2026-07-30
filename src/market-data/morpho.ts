@@ -10,6 +10,7 @@ const QUERY = `
     vaultByAddress(address: $address, chainId: $chainId) {
       state {
         netApy
+        totalAssetsUsd
       }
     }
   }
@@ -23,6 +24,14 @@ interface MorphoApiResponse {
         // tipado como `| null` porque a API GraphQL pode legitimamente
         // devolver `null` (não ausente) num vault sem dado ainda.
         netApy: number | null;
+        /**
+         * Profundidade do vault em USD. Campo confirmado ao vivo na API antes de
+         * entrar na query — pedir campo inexistente faria o GraphQL devolver
+         * `errors` e derrubaria a leitura INTEIRA do Morpho, não só a
+         * profundidade. Tratado como opcional mesmo assim: se um dia sumir, a
+         * profundidade vira `null` e a taxa continua sendo servida.
+         */
+        totalAssetsUsd?: number | null;
       };
     };
   };
@@ -57,6 +66,7 @@ async function readMorphoVaultApyUncached(asset: LendingAssetId): Promise<RateRe
   }
 
   const netApy = json.data?.vaultByAddress?.state?.netApy;
+  const totalAssetsUsd = json.data?.vaultByAddress?.state?.totalAssetsUsd;
   // `!= null` cobre `undefined` (campo ausente) E `null` (a API devolve isso
   // pra vault sem dado — visto na prática, não é só um caso teórico de tipo).
   if (netApy === undefined || netApy === null || !Number.isFinite(netApy)) {
@@ -76,6 +86,7 @@ async function readMorphoVaultApyUncached(asset: LendingAssetId): Promise<RateRe
     apyBaseBps: null,
     apyRewardBps: null,
     rewardBasis: "included-not-itemized",
+    tvlUsd: typeof totalAssetsUsd === "number" && Number.isFinite(totalAssetsUsd) ? totalAssetsUsd : null,
     source: "api",
     readAt: new Date(),
   };

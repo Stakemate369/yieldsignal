@@ -110,6 +110,18 @@ export interface RateReading {
    *   PODE ESTAR SUBESTIMADO se houver campanha ativa.
    */
   rewardBasis: "reported" | "inferred" | "included-not-itemized" | "unavailable";
+  /**
+   * Profundidade do mercado em USD. `null` = não apurável nesta leitura.
+   *
+   * O serviço já lia este número e o usava só pra descartar pool morto, jogando
+   * fora em seguida — o comprador recebia "melhor protocolo" sem saber se o
+   * vencedor tem US$ 9 milhões ou US$ 700 mil de fundo. Para um agente com
+   * capital de verdade essa é a diferença entre recomendação executável e
+   * impossível: a APY do topo de um pool raso não sobrevive à própria entrada
+   * dele. Mesmo erro de família já visto em outro projeto (ordenar por retorno
+   * bruto faz a rota inviável ganhar da viável).
+   */
+  tvlUsd: number | null;
   source: "onchain" | "api" | "defillama";
   readAt: Date;
 }

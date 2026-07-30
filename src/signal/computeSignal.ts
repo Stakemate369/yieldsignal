@@ -13,6 +13,8 @@ export interface SignalRate {
   apyRewardBps: number | null;
   /** Procedência do componente de incentivo — ver RateReading.rewardBasis. */
   rewardBasis: RateReading["rewardBasis"];
+  /** Profundidade do mercado em USD. `null` = não apurável nesta leitura. Ver RateReading.tvlUsd. */
+  tvlUsd: number | null;
   weightedApyBps: number;
   source: RateReading["source"];
   asOf: string;
@@ -64,6 +66,7 @@ export function computeSignal(readings: RateReading[]): YieldSignal {
       apyBaseBps: r.apyBaseBps,
       apyRewardBps: r.apyRewardBps,
       rewardBasis: r.rewardBasis,
+      tvlUsd: r.tvlUsd,
       weightedApyBps: weightedApyBps(r.protocol, r.supplyApyBps),
       source: r.source,
       asOf: r.readAt.toISOString(),

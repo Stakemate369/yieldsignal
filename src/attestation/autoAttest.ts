@@ -104,13 +104,25 @@ export interface AutoAttestOutcome {
  */
 export async function runAutoAttestForAsset(
   asset: AssetId,
-  opts: { signer: SignerAccount; schemaUid: `0x${string}`; minGasReserveEth: number },
+  opts: {
+    signer: SignerAccount;
+    /** UID em que GRAVAR — o v2 quando configurado, senão o v1. */
+    schemaUid: `0x${string}`;
+    schemaVersion?: 1 | 2;
+    /** UIDs antigos, só pra LEITURA do histórico: o gatilho compara contra a última atestação, que pode ser de antes da migração. */
+    legacySchemaUids?: `0x${string}`[];
+    minGasReserveEth: number;
+  },
 ): Promise<AutoAttestOutcome> {
   try {
     const readings = await collectRates(asset);
     const signal = computeSignal(readings);
 
-    const attestations = await fetchSignalAttestations({ schemaId: opts.schemaUid, attester: opts.signer.address });
+    const attestations = await fetchSignalAttestations({
+      schemaId: opts.schemaUid,
+      alsoSchemaIds: opts.legacySchemaUids,
+      attester: opts.signer.address,
+    });
     const lastForAsset = attestations.find((a) => a.asset === asset);
 
     const decision = decideAutoAttest({ signal, lastAttestation: lastForAsset });

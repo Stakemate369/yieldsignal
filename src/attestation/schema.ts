@@ -12,6 +12,29 @@
  */
 export const SIGNAL_SCHEMA = "string asset,string bestProtocol,uint256 weightedApyBps,uint256 gapBps,uint64 asOf";
 
+/**
+ * Schema v2 — acrescenta o SEGUNDO COLOCADO e a COBERTURA da leitura.
+ *
+ * Motivo (2026-07-30): com só o vencedor gravado, a pontuação por janela de
+ * vigência (windowedAccuracy.ts) consegue dizer "a chamada se sustentou ou foi
+ * substituída", mas nunca QUANTO o comprador deixou na mesa — pra isso é
+ * preciso saber contra o que ele estava competindo naquele instante. E, sem a
+ * cobertura, não dá pra distinguir no histórico público uma atestação feita
+ * sobre leitura completa de outra feita quando uma fonte estava muda, que é
+ * exatamente a situação que o serviço passou a admitir em `omittedProtocols`.
+ *
+ * `gapBps` continua no schema mesmo sendo derivável do par de APYs: remover
+ * campo quebraria a leitura das atestações antigas e o custo de gravar um
+ * uint256 a mais na Base é desprezível perto de manter o histórico legível
+ * pelo mesmo decodificador.
+ *
+ * Registrar exige uma transação real na mainnet — `npm run register-schema`,
+ * com CONFIRM digitado à mão. Enquanto `EAS_SCHEMA_UID_V2` estiver vazio, TUDO
+ * continua funcionando exatamente como antes, no v1.
+ */
+export const SIGNAL_SCHEMA_V2 =
+  "string asset,string bestProtocol,uint256 weightedApyBps,uint256 gapBps,uint64 asOf,string runnerUpProtocol,uint256 runnerUpWeightedApyBps,uint256 protocolsRead,uint256 protocolsExpected";
+
 // Tipos dos campos do schema acima, na mesma ordem — usado tanto pra montar
 // quanto (futuramente) decodificar o `data` da atestação.
 export const SIGNAL_SCHEMA_TYPES = [
@@ -20,6 +43,15 @@ export const SIGNAL_SCHEMA_TYPES = [
   { name: "weightedApyBps", type: "uint256" },
   { name: "gapBps", type: "uint256" },
   { name: "asOf", type: "uint64" },
+] as const;
+
+/** Tipos do SIGNAL_SCHEMA_V2, na mesma ordem — o v1 é prefixo exato deste. */
+export const SIGNAL_SCHEMA_TYPES_V2 = [
+  ...SIGNAL_SCHEMA_TYPES,
+  { name: "runnerUpProtocol", type: "string" },
+  { name: "runnerUpWeightedApyBps", type: "uint256" },
+  { name: "protocolsRead", type: "uint256" },
+  { name: "protocolsExpected", type: "uint256" },
 ] as const;
 
 // Fragmentos mínimos de ABI (só o que este projeto chama) — endereços

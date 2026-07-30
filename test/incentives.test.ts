@@ -39,56 +39,56 @@ describe("readIncentiveComponent", () => {
   it("usa o apyReward informado pela fonte, inclusive quando é zero (0 = sabidamente sem campanha, ≠ desconhecido)", async () => {
     mockPoolsResponse([{ ...AAVE_USDC_POOL, apyReward: 0 }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 350);
-    expect(incentive).toEqual({ rewardBps: 0, basis: "reported" });
+    expect(incentive).toEqual({ rewardBps: 0, basis: "reported", tvlUsd: 21_000_000 });
   });
 
   it("converte o apyReward informado pra bps", async () => {
     mockPoolsResponse([{ ...AAVE_USDC_POOL, apyBase: 3.5, apyReward: 1.25 }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 350);
-    expect(incentive).toEqual({ rewardBps: 125, basis: "reported" });
+    expect(incentive).toEqual({ rewardBps: 125, basis: "reported", tvlUsd: 21_000_000 });
   });
 
   it("infere incentivo quando o agregado fica materialmente acima do juro base on-chain", async () => {
     // agregado 5,00% vs base on-chain 3,50% => 150 bps atribuídos a incentivo
     mockPoolsResponse([{ ...AAVE_USDC_POOL, apy: 5, apyBase: 5, apyReward: null }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 350);
-    expect(incentive).toEqual({ rewardBps: 150, basis: "inferred" });
+    expect(incentive).toEqual({ rewardBps: 150, basis: "inferred", tvlUsd: 21_000_000 });
   });
 
   it("agregado que NÃO supera o juro base vira incentivo zero, não desconhecido — o agregado já inclui reward por definição", async () => {
     mockPoolsResponse([{ ...AAVE_USDC_POOL, apy: 3.5, apyBase: 3.5, apyReward: null }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 356);
-    expect(incentive).toEqual({ rewardBps: 0, basis: "inferred" });
+    expect(incentive).toEqual({ rewardBps: 0, basis: "inferred", tvlUsd: 21_000_000 });
   });
 
   it("diferença dentro do ruído também vira zero (não há campanha material escondida ali)", async () => {
     mockPoolsResponse([{ ...AAVE_USDC_POOL, apy: 3.6, apyBase: 3.6, apyReward: null }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 350);
-    expect(incentive).toEqual({ rewardBps: 0, basis: "inferred" });
+    expect(incentive).toEqual({ rewardBps: 0, basis: "inferred", tvlUsd: 21_000_000 });
   });
 
   it("NÃO infere com juro base zerado — senão um RPC degenerado viraria APY inventada (bug pego por teste)", async () => {
     mockPoolsResponse([AAVE_USDC_POOL]);
     const incentive = await readIncentiveComponent("aave", "USDC", 0);
-    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable" });
+    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable", tvlUsd: 21_000_000 });
   });
 
   it("NÃO infere quando a divergência passa do teto (metodologia diferente, não campanha)", async () => {
     // base on-chain 100 bps, agregado 500 bps => excedente 400 bps = 4x o base
     mockPoolsResponse([{ ...AAVE_USDC_POOL, apy: 5, apyBase: 5, apyReward: null }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 100);
-    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable" });
+    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable", tvlUsd: 21_000_000 });
   });
 
   it("degrada pra desconhecido (não lança) quando o pool de referência sumiu da fonte", async () => {
     mockPoolsResponse([{ ...AAVE_USDC_POOL, pool: "outro-uuid-qualquer" }]);
     const incentive = await readIncentiveComponent("aave", "USDC", 350);
-    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable" });
+    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable", tvlUsd: null });
   });
 
   it("degrada pra desconhecido (não lança) quando a fonte falha — leitura on-chain não pode cair por causa de terceiro", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("rede fora")));
     const incentive = await readIncentiveComponent("compound", "WETH", 200);
-    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable" });
+    expect(incentive).toEqual({ rewardBps: null, basis: "unavailable", tvlUsd: null });
   });
 });

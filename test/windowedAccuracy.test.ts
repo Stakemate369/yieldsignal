@@ -14,6 +14,10 @@ function att(overrides: Partial<DecodedSignalAttestation> & { time: number }): D
     weightedApyBps: 500,
     gapBps: 40,
     asOf: overrides.time,
+    // Campos do schema v2: as atestações já gravadas são v1 e não os têm.
+    runnerUpProtocol: null,
+    runnerUpWeightedApyBps: null,
+    coverage: null,
     ...overrides,
   };
 }

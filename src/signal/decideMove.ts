@@ -21,6 +21,16 @@ import { computeSignal, type YieldSignal, type SignalRate } from "./computeSigna
 export type MoveAction = "MOVE" | "HOLD";
 export type Confidence = "high" | "medium" | "low";
 
+/**
+ * A partir de que fatia do mercado de destino a posição do comprador deixa de
+ * ser irrelevante pra taxa que ele está perseguindo. Acima disso, a entrada
+ * dele dilui o próprio rendimento (e, num mercado de incentivo, divide a
+ * campanha com menos gente por token). 5% é conservador e explícito — o
+ * objetivo não é decidir por ele, é não esconder a informação, que era o que
+ * acontecia enquanto o TVL era lido e descartado.
+ */
+export const POSITION_CROWDING_THRESHOLD_PCT = 5;
+
 export interface MoveDecisionInput {
   /** Onde o capital do comprador está agora. `null`/ausente = capital ocioso (rende 0). */
   currentProtocol: ProtocolId | null;
@@ -45,6 +55,19 @@ export interface MoveDecision {
   expectedNetGainUsd: number;
   /** Dias até o ganho pagar o custo de mover. `null` se não há ganho positivo (nunca paga). */
   breakEvenDays: number | null;
+  /**
+   * A vantagem do destino sobre a origem some se a campanha de incentivo do
+   * destino encerrar? `true` = o MOVE só se paga enquanto a campanha durar.
+   * `null` = não dá pra apurar (a fonte não separou o incentivo do destino).
+   */
+  gainDependsOnIncentives: boolean | null;
+  /**
+   * Quanto da posição do comprador representaria do mercado de destino. Acima
+   * de uns poucos por cento, a própria entrada dele derruba a taxa que motivou
+   * a mudança — a recomendação segue de pé, mas com essa ressalva explícita.
+   * `null` se a profundidade do destino não foi apurável.
+   */
+  positionShareOfDestinationPct: number | null;
   confidence: Confidence;
   reason: string;
   /** O sinal bruto que embasa a decisão — o comprador pode auditar os números. */
@@ -72,9 +95,37 @@ export function confidenceFor(rates: SignalRate[]): Confidence {
   // dele), por isso a checagem é só nos demais.
   const challengerRewardUnknown = rates.slice(1).some((r) => r.rewardBasis === "unavailable");
 
-  if (gapToSecond >= 50 && directSource && !challengerRewardUnknown) return "high";
+  // (4) Liderança que só existe por causa de campanha de incentivo não é uma
+  // afirmação forte: campanha termina de uma semana pra outra, juro base não.
+  if (gapToSecond >= 50 && directSource && !challengerRewardUnknown && !leadDependsOnIncentives(rates)) return "high";
   if (gapToSecond >= 20) return "medium";
   return "low";
+}
+
+/**
+ * A liderança do 1º colocado depende do incentivo dele? Isto é, tirando a
+ * campanha, ele deixaria de ser o melhor?
+ *
+ * Existe porque a própria correção que passou a somar incentivo (2026-07-30)
+ * mudou o vencedor de WETH: a Euler foi ao topo com 2,91%, dos quais 1,72 ponto
+ * era campanha, num pool de US$ 716 mil. O número está certo pela base
+ * declarada — é o que o comprador recebe HOJE —, mas uma vantagem que evapora
+ * quando a campanha encerra não merece o mesmo grau de confiança que uma
+ * vantagem de juro base. O ranking NÃO é alterado (o produto promete APY total,
+ * e mudar isso em silêncio seria vender outra coisa); o que muda é o quanto o
+ * serviço se compromete com a recomendação.
+ *
+ * `apyRewardBps` desconhecido no líder é tratado como zero: sem dado, não dá
+ * pra afirmar dependência — e inventar dependência rebaixaria a confiança à toa.
+ */
+export function leadDependsOnIncentives(rates: SignalRate[]): boolean {
+  const [best, second] = rates;
+  if (!best || !second) return false;
+  if (!best.apyRewardBps || best.apyBps <= 0) return false;
+  // O peso de risco já está embutido no weightedApyBps; aplico a mesma
+  // proporção ao componente de incentivo pra comparar na mesma escala.
+  const weightedReward = (best.apyRewardBps / best.apyBps) * best.weightedApyBps;
+  return best.weightedApyBps - weightedReward < second.weightedApyBps;
 }
 
 /**
@@ -113,7 +164,24 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
   const dailyGainUsd = annualGainUsd / 365;
   const breakEvenDays = dailyGainUsd > 0 ? input.moveCostUsd / dailyGainUsd : null;
 
-  const confidence = positionUnreadable ? "low" : confidenceFor(signal.rates);
+  // Dependência de campanha: mede o ganho SOBRE A ORIGEM (não a liderança em
+  // si) — é essa a conta que o comprador faz ao decidir mover. Se o ganho só
+  // existe por causa do incentivo do destino, mover é uma aposta no calendário
+  // da campanha, não na taxa.
+  const gainDependsOnIncentives =
+    positionUnreadable || best.apyRewardBps === null || best.apyBps <= 0
+      ? null
+      : netApyGainBps > 0 && netApyGainBps <= (best.apyRewardBps / best.apyBps) * best.weightedApyBps;
+
+  const positionShareOfDestinationPct =
+    best.tvlUsd !== null && best.tvlUsd > 0 ? Math.round(((input.amountUsd / best.tvlUsd) * 100 + Number.EPSILON) * 100) / 100 : null;
+  const crowdsDestination =
+    positionShareOfDestinationPct !== null && positionShareOfDestinationPct >= POSITION_CROWDING_THRESHOLD_PCT;
+
+  // A confiança nunca SOBE por causa destes fatores, só desce: os dois são
+  // motivos pra desconfiar de uma recomendação, nunca pra reforçá-la.
+  const baseConfidence = positionUnreadable ? "low" : confidenceFor(signal.rates);
+  const confidence: Confidence = crowdsDestination && baseConfidence === "high" ? "medium" : baseConfidence;
   const alreadyThere = input.currentProtocol !== null && input.currentProtocol === best.protocol;
 
   let action: MoveAction;
@@ -137,7 +205,16 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
     reason = `The ${netApyGainBps}bps gain does not cover the move cost ($${input.moveCostUsd.toFixed(4)}) over your ${input.horizonDays}-day horizon${beStr}. HOLD.`;
   } else {
     action = "MOVE";
-    reason = `Moving ${input.currentProtocol ?? "idle capital"} → ${best.protocol} yields +${netApyGainBps}bps risk-adjusted; estimated net gain of $${expectedNetGainUsd.toFixed(4)} over ${input.horizonDays} days after the move cost${breakEvenDays !== null ? ` (break-even in ~${breakEvenDays.toFixed(1)} days)` : ""}.`;
+    // As ressalvas entram na FRASE, não só no objeto: quem consome via LLM lê o
+    // `reason`, e uma recomendação de mover para um mercado raso ou para uma
+    // taxa que depende de campanha precisa vir com isso colado nela.
+    const incentiveCaveat = gainDependsOnIncentives
+      ? ` Note: the entire gain rests on ${best.protocol}'s incentive campaign (${best.apyRewardBps}bps of its ${best.apyBps}bps) — it disappears if the campaign ends.`
+      : "";
+    const depthCaveat = crowdsDestination
+      ? ` Note: your $${input.amountUsd.toLocaleString("en-US")} would be ${positionShareOfDestinationPct}% of ${best.protocol}'s $${Math.round(best.tvlUsd as number).toLocaleString("en-US")} market — large enough that entering dilutes the rate you are moving for.`
+      : "";
+    reason = `Moving ${input.currentProtocol ?? "idle capital"} → ${best.protocol} yields +${netApyGainBps}bps risk-adjusted; estimated net gain of $${expectedNetGainUsd.toFixed(4)} over ${input.horizonDays} days after the move cost${breakEvenDays !== null ? ` (break-even in ~${breakEvenDays.toFixed(1)} days)` : ""}.${incentiveCaveat}${depthCaveat}`;
   }
 
   return {
@@ -148,6 +225,8 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
     netApyGainBps,
     expectedNetGainUsd,
     breakEvenDays,
+    gainDependsOnIncentives,
+    positionShareOfDestinationPct,
     confidence,
     reason,
     signal,

@@ -74,9 +74,16 @@ export const INCENTIVE_LOOKUP_TIMEOUT_MS = 3_000;
 export interface IncentiveComponent {
   rewardBps: number | null;
   basis: "reported" | "inferred" | "unavailable";
+  /**
+   * Profundidade do mercado em USD, do mesmo pool de referência. Vem junto
+   * porque a consulta já foi feita — Aave e Compound expõem o saldo on-chain em
+   * unidades do token, e convertê-lo pra USD exigiria um oráculo de preço a
+   * mais dentro do caminho de uma resposta paga. Ver RateReading.tvlUsd.
+   */
+  tvlUsd: number | null;
 }
 
-const UNAVAILABLE: IncentiveComponent = { rewardBps: null, basis: "unavailable" };
+const UNAVAILABLE: IncentiveComponent = { rewardBps: null, basis: "unavailable", tvlUsd: null };
 
 /**
  * Componente de incentivo pra um protocolo lido on-chain, em bps.
@@ -104,13 +111,15 @@ export async function readIncentiveComponent(
       logger.warn({ protocol, asset, poolId, project }, "pool de referência de incentivo não encontrado na DefiLlama — incentivo desconhecido nesta leitura");
       return UNAVAILABLE;
     }
+    // Profundidade sai desta mesma consulta, independente do incentivo dar certo.
+    const tvlUsd = Number.isFinite(match.tvlUsd) ? match.tvlUsd : null;
     const split = splitPoolApy(match);
-    if (split === null) return UNAVAILABLE;
-    if (split.rewardBps !== null) return { rewardBps: split.rewardBps, basis: "reported" };
+    if (split === null) return { ...UNAVAILABLE, tvlUsd };
+    if (split.rewardBps !== null) return { rewardBps: split.rewardBps, basis: "reported", tvlUsd };
 
     // Base degenerada (zero/negativa) não sustenta inferência nenhuma: a
     // divergência inteira contra o agregado seria atribuída a incentivo.
-    if (onchainBaseBps <= 0) return UNAVAILABLE;
+    if (onchainBaseBps <= 0) return { ...UNAVAILABLE, tvlUsd };
 
     const surplusBps = split.totalBps - onchainBaseBps;
     // Agregado legível e NÃO acima do juro base é informação, não ignorância: o
@@ -120,16 +129,16 @@ export async function readIncentiveComponent(
     // exatamente neste caso (agregado 3,50% vs base on-chain 3,56%), e marcá-la
     // como incerta pra sempre rebaixaria a confiança de toda decisão em que ela
     // não é a líder.
-    if (surplusBps < INCENTIVE_INFERENCE_MIN_BPS) return { rewardBps: 0, basis: "inferred" };
+    if (surplusBps < INCENTIVE_INFERENCE_MIN_BPS) return { rewardBps: 0, basis: "inferred", tvlUsd };
     if (surplusBps > onchainBaseBps * INCENTIVE_INFERENCE_MAX_MULTIPLE) {
       logger.warn(
         { protocol, asset, onchainBaseBps, aggregateBps: split.totalBps, surplusBps },
         "divergência grande demais entre agregado e juro base — provável diferença de metodologia, NÃO atribuindo a incentivo",
       );
-      return UNAVAILABLE;
+      return { ...UNAVAILABLE, tvlUsd };
     }
     logger.info({ protocol, asset, onchainBaseBps, aggregateBps: split.totalBps, surplusBps }, "agregado da DefiLlama acima do juro base on-chain — diferença atribuída a incentivo");
-    return { rewardBps: surplusBps, basis: "inferred" };
+    return { rewardBps: surplusBps, basis: "inferred", tvlUsd };
   } catch (err) {
     // Best-effort por design: incentivo desconhecido é degradação aceitável,
     // derrubar a leitura on-chain por causa de um agregador de terceiro não é.

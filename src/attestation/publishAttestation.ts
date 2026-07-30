@@ -28,10 +28,12 @@ export async function publishAttestation(params: {
   signal: YieldSignal;
   signer: SignerAccount;
   schemaUid: `0x${string}`;
+  /** Versão do schema em que gravar — tem que casar com o UID passado, ver attestation/schema.ts. */
+  schemaVersion?: 1 | 2;
   /** Reserva mínima de ETH que deve sobrar — abaixo disso, lança InsufficientGasError em vez de gastar o resto do saldo. */
   minGasReserveWei?: bigint;
 }): Promise<AttestationResult> {
-  const { signal, signer, schemaUid, minGasReserveWei = 0n } = params;
+  const { signal, signer, schemaUid, schemaVersion = 1, minGasReserveWei = 0n } = params;
   const env = loadEnv();
   const { chain } = withdrawNetworkFor(env.X402_ENVIRONMENT);
   const publicClient = createPublicClient({ chain, transport: http() });
@@ -43,7 +45,7 @@ export async function publishAttestation(params: {
     );
   }
 
-  const data = buildAttestCalldata(schemaUid, signal);
+  const data = buildAttestCalldata(schemaUid, signal, schemaVersion);
 
   // Mesmo cuidado de cli/withdraw.ts: um erro aqui pode ter acontecido DEPOIS
   // do envio já ter sido aceito (RPC lag, timeout da API da CDP) — reenviar

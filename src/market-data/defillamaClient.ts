@@ -15,10 +15,18 @@ export interface DefiLlamaPool {
   tvlUsd: number;
 }
 
-// Piso conservador só pra descartar pool claramente morto/abandonado (TVL
-// residual, onde uma APY reportada costuma ser ruído, não sinal real) — não
-// é uma barreira de qualidade rigorosa, só uma rede de segurança barata.
-export const MIN_POOL_TVL_USD = 1_000;
+/**
+ * Piso pra descartar pool claramente morto/abandonado — onde a APY reportada é
+ * ruído de arredondamento sobre um saldo residual, não taxa de mercado.
+ *
+ * NÃO é política de profundidade: um pool de US$ 700 mil é raso pra um agente
+ * com capital sério, mas é um mercado real e omiti-lo esconderia uma opção
+ * legítima. Profundidade é decisão de quem aloca, então ela vai EXPOSTA em
+ * `tvlUsd` por leitura (ver RateReading) em vez de virar filtro silencioso
+ * aqui. Subiu de US$ 1.000 pra US$ 25.000 porque o valor antigo não descartava
+ * nada na prática.
+ */
+export const MIN_POOL_TVL_USD = 25_000;
 
 let cache: { pools: DefiLlamaPool[]; fetchedAt: number } | null = null;
 let inFlight: Promise<DefiLlamaPool[]> | null = null;
@@ -123,7 +131,7 @@ export function readingFromPool<T extends { protocol: string; asset: string }>(
   match: DefiLlamaPool | undefined,
   build: (match: DefiLlamaPool) => T,
   logContext: Record<string, unknown>,
-): (T & { supplyApyBps: number; apyBaseBps: number | null; apyRewardBps: number | null; rewardBasis: "reported" | "included-not-itemized"; source: "defillama"; readAt: Date }) | null {
+): (T & { supplyApyBps: number; apyBaseBps: number | null; apyRewardBps: number | null; rewardBasis: "reported" | "included-not-itemized"; tvlUsd: number | null; source: "defillama"; readAt: Date }) | null {
   if (!match) {
     logger.warn(logContext, "pool não encontrado (ou não bate mais poolId/project/chain/symbol) na resposta atual da DefiLlama — omitindo desta vez");
     return null;
@@ -153,6 +161,7 @@ export function readingFromPool<T extends { protocol: string; asset: string }>(
     // existe (componentes null) ele continua sendo base+reward por definição
     // da fonte, então o total é comparável — só não dá pra itemizar.
     rewardBasis: split.rewardBps === null ? ("included-not-itemized" as const) : ("reported" as const),
+    tvlUsd: Number.isFinite(match.tvlUsd) ? match.tvlUsd : null,
     source: "defillama",
     readAt: new Date(),
   };

@@ -59,6 +59,7 @@ async function readCompoundSupplyApyUncached(asset: LendingAssetId): Promise<Rat
     apyBaseBps,
     apyRewardBps: incentive.rewardBps,
     rewardBasis: incentive.basis,
+    tvlUsd: incentive.tvlUsd,
     source: "onchain",
     readAt: new Date(),
   };

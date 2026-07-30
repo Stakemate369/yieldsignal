@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decideMove, confidenceFor } from "../src/signal/decideMove.js";
+import { decideMove, confidenceFor, leadDependsOnIncentives } from "../src/signal/decideMove.js";
 import type { MoveDecisionInput } from "../src/signal/decideMove.js";
 import type { RateReading } from "../src/market-data/types.js";
 
@@ -9,7 +9,7 @@ function reading(
   source: RateReading["source"] = "onchain",
   asset: RateReading["asset"] = "USDC",
 ): RateReading {
-  return { protocol, asset, supplyApyBps, apyBaseBps: supplyApyBps, apyRewardBps: 0, rewardBasis: "reported", source, readAt: new Date("2026-07-21T12:00:00.000Z") };
+  return { protocol, asset, supplyApyBps, apyBaseBps: supplyApyBps, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, source, readAt: new Date("2026-07-21T12:00:00.000Z") };
 }
 
 // Pesos de risco: aave 1.0, morpho 0.97, compound 0.99. Usados aqui pra
@@ -118,24 +118,24 @@ describe("decideMove", () => {
 describe("confidenceFor", () => {
   it("high: gap >= 50bps E fonte direta (onchain/api)", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 600, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 600, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("high");
   });
 
   it("medium: gap >= 20bps mas fonte agregada (defillama) — não vira high", () => {
     const c = confidenceFor([
-      { protocol: "fluid", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 510, source: "defillama", asOf: "" },
-      { protocol: "aave", apyBps: 480, apyBaseBps: 480, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 480, source: "onchain", asOf: "" },
+      { protocol: "fluid", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 510, source: "defillama", asOf: "" },
+      { protocol: "aave", apyBps: 480, apyBaseBps: 480, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 480, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("medium");
   });
 
   it("low: gap pequeno (ruído) mesmo com fonte direta", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 500, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 495, apyBaseBps: 495, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 500, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 495, apyBaseBps: 495, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("low");
   });
@@ -149,17 +149,108 @@ describe("confidenceFor", () => {
   // invertido — e não dá pra saber por quanto.
   it("não vira high se o incentivo de um CONCORRENTE é desconhecido, mesmo com gap grande e fonte direta", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 600, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: null, rewardBasis: "unavailable", weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 600, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: null, rewardBasis: "unavailable", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("medium");
   });
 
   it("incentivo desconhecido no PRÓPRIO líder não derruba a confiança — subestimar o líder não tira a liderança dele", () => {
     const c = confidenceFor([
-      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: null, rewardBasis: "unavailable", weightedApyBps: 600, source: "onchain", asOf: "" },
-      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", weightedApyBps: 495, source: "onchain", asOf: "" },
+      { protocol: "aave", apyBps: 600, apyBaseBps: 600, apyRewardBps: null, rewardBasis: "unavailable", tvlUsd: 5_000_000, weightedApyBps: 600, source: "onchain", asOf: "" },
+      { protocol: "compound", apyBps: 500, apyBaseBps: 500, apyRewardBps: 0, rewardBasis: "reported", tvlUsd: 5_000_000, weightedApyBps: 495, source: "onchain", asOf: "" },
     ]);
     expect(c).toBe("high");
+  });
+});
+
+/**
+ * Estas duas regras nasceram de um caso REAL: a correção que passou a somar
+ * incentivo (2026-07-30) mudou o vencedor de WETH pra Euler a 2,91%, dos quais
+ * 1,72 ponto era campanha, num pool de US$ 716 mil. O número está certo; o que
+ * faltava era o serviço dizer em cima do que ele está apoiado.
+ */
+describe("dependência de campanha e profundidade do destino", () => {
+  function rate(
+    protocol: RateReading["protocol"],
+    apyBps: number,
+    rewardBps: number | null,
+    weightedApyBps: number,
+    tvlUsd: number | null,
+  ) {
+    return {
+      protocol,
+      apyBps,
+      apyBaseBps: rewardBps === null ? null : apyBps - rewardBps,
+      apyRewardBps: rewardBps,
+      rewardBasis: (rewardBps === null ? "unavailable" : "reported") as "unavailable" | "reported",
+      tvlUsd,
+      weightedApyBps,
+      source: "defillama" as const,
+      asOf: "",
+    };
+  }
+
+  it("liderança que só existe por causa da campanha não recebe confiança high", () => {
+    // Euler 291 total (172 de campanha) contra Aave 146: sem a campanha, cai pra 119.
+    const rates = [rate("euler", 291, 172, 253, 716_000), rate("aave", 146, 0, 146, 39_000_000)];
+    expect(leadDependsOnIncentives(rates)).toBe(true);
+    expect(confidenceFor(rates)).toBe("medium");
+  });
+
+  it("liderança sustentada pelo juro base continua podendo ser high", () => {
+    const rates = [
+      { ...rate("compound", 601, 0, 595, 21_000_000), source: "onchain" as const },
+      rate("aave", 356, 0, 356, 39_000_000),
+    ];
+    expect(leadDependsOnIncentives(rates)).toBe(false);
+    expect(confidenceFor(rates)).toBe("high");
+  });
+
+  it("incentivo desconhecido no líder não é tratado como dependência (não inventa fraqueza)", () => {
+    const rates = [rate("euler", 291, null, 253, 716_000), rate("aave", 146, 0, 146, 39_000_000)];
+    expect(leadDependsOnIncentives(rates)).toBe(false);
+  });
+
+  it("MOVE avisa quando o ganho inteiro depende da campanha do destino", () => {
+    const readings = [
+      { ...reading("euler", 291), apyBaseBps: 119, apyRewardBps: 172, rewardBasis: "reported" as const, tvlUsd: 716_000 },
+      { ...reading("aave", 146), apyBaseBps: 146, apyRewardBps: 0, rewardBasis: "reported" as const, tvlUsd: 39_000_000 },
+    ];
+    const d = decideMove(readings, { currentProtocol: "aave", amountUsd: 10_000, moveCostUsd: 2, horizonDays: 30 });
+    expect(d.action).toBe("MOVE");
+    expect(d.gainDependsOnIncentives).toBe(true);
+    expect(d.reason).toContain("incentive campaign");
+  });
+
+  it("MOVE avisa quando a posição é grande demais pro mercado de destino, e derruba a confiança", () => {
+    const readings = [
+      { ...reading("euler", 291), apyBaseBps: 291, apyRewardBps: 0, rewardBasis: "reported" as const, tvlUsd: 716_000 },
+      { ...reading("aave", 146), apyBaseBps: 146, apyRewardBps: 0, rewardBasis: "reported" as const, tvlUsd: 39_000_000 },
+    ];
+    const d = decideMove(readings, { currentProtocol: "aave", amountUsd: 500_000, moveCostUsd: 2, horizonDays: 30 });
+    expect(d.positionShareOfDestinationPct).toBeGreaterThan(5);
+    expect(d.reason).toContain("dilutes the rate");
+    expect(d.confidence).not.toBe("high");
+  });
+
+  it("posição pequena num mercado fundo não dispara ressalva nenhuma", () => {
+    const readings = [
+      { ...reading("euler", 291), apyBaseBps: 291, apyRewardBps: 0, rewardBasis: "reported" as const, tvlUsd: 39_000_000 },
+      { ...reading("aave", 146), apyBaseBps: 146, apyRewardBps: 0, rewardBasis: "reported" as const, tvlUsd: 39_000_000 },
+    ];
+    const d = decideMove(readings, { currentProtocol: "aave", amountUsd: 10_000, moveCostUsd: 2, horizonDays: 30 });
+    expect(d.positionShareOfDestinationPct).toBeLessThan(1);
+    expect(d.reason).not.toContain("dilutes the rate");
+  });
+
+  it("profundidade não apurável vira null, não zero (não inventa mercado raso)", () => {
+    const readings = [
+      { ...reading("morpho", 500), apyBaseBps: null, apyRewardBps: null, rewardBasis: "included-not-itemized" as const, tvlUsd: null },
+      { ...reading("aave", 146), apyBaseBps: 146, apyRewardBps: 0, rewardBasis: "reported" as const, tvlUsd: 39_000_000 },
+    ];
+    const d = decideMove(readings, { currentProtocol: "aave", amountUsd: 500_000, moveCostUsd: 2, horizonDays: 30 });
+    expect(d.positionShareOfDestinationPct).toBeNull();
+    expect(d.reason).not.toContain("dilutes the rate");
   });
 });

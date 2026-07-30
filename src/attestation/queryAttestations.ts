@@ -13,6 +13,14 @@ export interface DecodedSignalAttestation {
   gapBps: number;
   /** Segundos unix — o `asOf` que estava DENTRO do sinal atestado (campo do nosso schema, ver attestation/schema.ts). */
   asOf: number;
+  /**
+   * Campos que só existem no schema v2 (ver SIGNAL_SCHEMA_V2). `null` numa
+   * atestação v1 — as 100 primeiras do histórico são v1 e continuam sendo
+   * lidas normalmente; quem consome precisa tratar a ausência, não presumir.
+   */
+  runnerUpProtocol: ProtocolId | null;
+  runnerUpWeightedApyBps: number | null;
+  coverage: { read: number; expected: number } | null;
 }
 
 // Formato exato devolvido pelo EASScan GraphQL pro campo `decodedDataJson` —
@@ -54,6 +62,20 @@ export function decodeSignalAttestation(raw: RawAttestation): DecodedSignalAttes
     throw new Error(`campo "${name}" ausente ou não-numérico na atestação ${raw.id}`);
   }
 
+  // Campos do v2: OPCIONAIS por construção. Uma atestação v1 simplesmente não
+  // os traz, e exigir presença faria o decodificador quebrar em cima do
+  // histórico que já está gravado on-chain e não pode ser reescrito.
+  function optionalStr(name: string): string | null {
+    const v = byName.get(name);
+    return typeof v === "string" && v !== "" ? v : null;
+  }
+  function optionalNum(name: string): number | null {
+    const v = byName.get(name);
+    return typeof v === "object" && v !== null && "hex" in v ? Number(BigInt(v.hex)) : null;
+  }
+  const protocolsRead = optionalNum("protocolsRead");
+  const protocolsExpected = optionalNum("protocolsExpected");
+
   return {
     uid: raw.id as `0x${string}`,
     attester: raw.attester as `0x${string}`,
@@ -63,6 +85,9 @@ export function decodeSignalAttestation(raw: RawAttestation): DecodedSignalAttes
     weightedApyBps: num("weightedApyBps"),
     gapBps: num("gapBps"),
     asOf: num("asOf"),
+    runnerUpProtocol: optionalStr("runnerUpProtocol") as ProtocolId | null,
+    runnerUpWeightedApyBps: optionalNum("runnerUpWeightedApyBps"),
+    coverage: protocolsRead !== null && protocolsExpected !== null ? { read: protocolsRead, expected: protocolsExpected } : null,
   };
 }
 
@@ -75,10 +100,18 @@ export function decodeSignalAttestation(raw: RawAttestation): DecodedSignalAttes
  */
 export async function fetchSignalAttestations(params: {
   schemaId: `0x${string}`;
+  /**
+   * Schemas ADICIONAIS a incluir na mesma busca (ex.: o v1 depois de o serviço
+   * migrar pro v2). Sem isto, o dia da migração zeraria o track record público
+   * — as atestações antigas continuam válidas e verificáveis, só estão sob
+   * outro UID.
+   */
+  alsoSchemaIds?: `0x${string}`[];
   attester: `0x${string}`;
   take?: number;
 }): Promise<DecodedSignalAttestation[]> {
-  const { schemaId, attester, take = 100 } = params;
+  const { schemaId, alsoSchemaIds = [], attester, take = 100 } = params;
+  const schemaIds = Array.from(new Set([schemaId, ...alsoSchemaIds]));
   const query = `query($where: AttestationWhereInput, $take: Int) {
     attestations(where: $where, take: $take, orderBy: { time: desc }) {
       id
@@ -92,7 +125,7 @@ export async function fetchSignalAttestations(params: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
-      variables: { where: { schemaId: { equals: schemaId }, attester: { equals: attester } }, take },
+      variables: { where: { schemaId: { in: schemaIds }, attester: { equals: attester } }, take },
     }),
   });
   if (!res.ok) {

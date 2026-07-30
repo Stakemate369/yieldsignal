@@ -55,6 +55,7 @@ async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateRea
     apyBaseBps,
     apyRewardBps: incentive.rewardBps,
     rewardBasis: incentive.basis,
+    tvlUsd: incentive.tvlUsd,
     source: "onchain",
     readAt: new Date(),
   };

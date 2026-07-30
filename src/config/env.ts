@@ -30,6 +30,14 @@ const schema = z.object({
   EAS_SCHEMA_UID: z
     .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{64}$/)])
     .default(""),
+  // Schema v2 (segundo colocado + cobertura da leitura, ver
+  // attestation/schema.ts). VAZIO = tudo segue no v1, exatamente como antes:
+  // esta variável é o único interruptor da migração. Quando preenchida, as
+  // atestações NOVAS são gravadas no v2 e o histórico v1 continua sendo lido
+  // junto, pra o track record público não zerar no dia da virada.
+  EAS_SCHEMA_UID_V2: z
+    .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{64}$/)])
+    .default(""),
   // Protege POST /internal/auto-attest (gasta ETH real de gas quando dispara)
   // — DIFERENTE do padrão usado em checks read-only: aqui vazio significa
   // NEGAR sempre (fail-closed), nunca "endpoint aberto por falta de config",

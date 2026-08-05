@@ -7,7 +7,7 @@ Risk-weighted yield signals for autonomous agents, paid per call via the [x402](
 - **ETH liquid staking** (Ethereum mainnet) across **Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH**
 - **USDC and WETH lending** (Base) across **Aave, Compound, Morpho, Moonwell, Euler and Fluid**
 
-Two tiers: the raw **signal** (what pays best right now) and the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days).
+Four products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), and the **capacity** report (can you actually withdraw your size from that market).
 
 **Live:** `https://yieldsignal.vercel.app`
 
@@ -17,6 +17,9 @@ GET https://yieldsignal.vercel.app/signal/usdc-base-yield
 GET https://yieldsignal.vercel.app/signal/weth-base-yield
 
 GET https://yieldsignal.vercel.app/decision/eth-staking-yield?position=lido&amountUsd=25000&horizonDays=30
+
+GET https://yieldsignal.vercel.app/durability/weth-base-yield
+GET https://yieldsignal.vercel.app/capacity/usdc-base-yield?amountUsd=200000
 ```
 
 Bare `/signal` and `/decision` (no asset) redirect to the ETH staking route — the asset with the strongest verified track record. Short forms like `/signal/usdc` redirect to the canonical path.
@@ -73,6 +76,27 @@ Each rate also carries `tvlUsd` with a `tvlBasis` saying what that number measur
 The decision routes act on both: `/decision/*` returns `gainDependsOnIncentives` and `positionShareOfDestinationPct`, states them in the human-readable `reason`, and lowers confidence when your position would be a large share of the destination. A real response:
 
 > `MOVE`, confidence `medium` — "Moving aave → euler yields +106bps risk-adjusted … Note: the entire gain rests on euler's incentive campaign (172bps of its 291bps) — it disappears if the campaign ends. Note: your $200,000 would be 27.9% of euler's $716,897 market — large enough that entering dilutes the rate you are moving for."
+
+### Is the yield real? — `/durability/*`
+
+Splits every protocol's APY into base interest vs incentive and reports the **post-incentive floor**: what you keep if the reward campaign stops. On a live reading (2026-08-05), WETH on Base led with `euler` at 299bps — **57.9% of it incentive**, floor 126bps — while `aave`'s 153bps was entirely base. Without incentives the ranking flips. The signal endpoint alone would have pointed you at euler.
+
+Two rules keep this from becoming a false-alarm generator:
+
+- **Only itemized sources are decomposed.** `rewardBasis: "included-not-itemized"` or `"unavailable"` means the floor is unknown, and the protocol is listed in `undecomposable` — never treated as incentive-free. Absence of a reported incentive is not evidence of absence.
+- **No ranking claim when the leader is opaque.** If the current best protocol can't be decomposed, `rankingChangesWithoutIncentives` is `null`, not `false`. You still get `bestVerifiableFloor` — the highest yield provably independent of incentives — which is a fully measured statement either way.
+
+**Base lending only (USDC/WETH).** Checked live on 2026-08-05, all five liquid-staking sources report `apyReward: null` on DefiLlama — 0 of 5 decomposable on every call — so an ETH staking durability route would charge for "cannot establish". Staking yield being incentive-free is plausible, but a missing `apyReward` doesn't prove it, and that's the same inference this service refuses to make for `fluid`/`morpho` on the lending side.
+
+**Deliberately not a date forecast.** The obvious source for "when does this campaign end" is Merkl's API (`earliestCampaignEnd`). Checked live on 2026-08-05 against `api.merkl.xyz/v4/opportunities?chainId=8453&status=LIVE`: Aave, Compound, Euler and Fluid have **zero** `LEND` campaigns there, and Morpho/Moonwell appear only as curated MetaMorpho vaults that aren't the markets this service reads. `status=PAST` returns null timestamps, so renewal history isn't measurable either. Covering 2 of 6 protocols by guessing at vault matches — with most campaigns being weekly and auto-renewing — would produce a confident-looking number that is wrong, which is the opposite of what this service sells.
+
+### Can you actually get out? — `/capacity/*`
+
+A lending market at 99% utilization pays beautifully and won't let you withdraw; the high rate *is* the symptom. `tvlUsd` can't tell the two apart — $100M supplied with $99M borrowed and $100M supplied with $10M borrowed are the same number.
+
+Utilization and free liquidity come from the protocol's own books, in the **same call that already fetched the rate** (Aave: the `getReserveData` tuple; Compound: `getUtilization()` + `totalSupply()`), so this costs zero extra RPC. Pass `?amountUsd=` and each protocol reports whether that size can exit now (`canExitNow`), the coverage ratio, and what share of the market it would be.
+
+Morpho and the DefiLlama-sourced protocols don't publish borrowed-vs-supplied, so they're marked `measured: false` and are **never** returned as `bestProtocolExecutable`. Unmeasured is not the same as liquid. USD figures are USDC-only — converting a WETH balance would need a price oracle inside a paid response path; WETH still gets utilization, which is unitless.
 
 ### How long is a signal good for?
 

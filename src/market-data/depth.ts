@@ -1,4 +1,4 @@
-import type { LendingAssetId } from "./types.js";
+import type { LendingAssetId, MarketLiquidity } from "./types.js";
 
 /**
  * Profundidade do mercado, em USD, a partir do saldo que o PRÓPRIO protocolo
@@ -30,4 +30,53 @@ export function onchainDepthUsd(asset: LendingAssetId, rawBalance: bigint | unde
   if (decimals === undefined || rawBalance === undefined) return null;
   const value = Number(rawBalance) / 10 ** decimals;
   return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+/**
+ * Como `onchainDepthUsd`, mas ZERO é um resultado válido em vez de `null`.
+ *
+ * A distinção importa exatamente uma vez, e é justamente no caso que mais
+ * interessa ao comprador: um mercado 100% utilizado tem zero sacável. Servir
+ * `null` ali ("não apurado") num campo de liquidez leria como "sem informação"
+ * quando na verdade a informação é a pior possível. `onchainDepthUsd` mantém o
+ * corte em `> 0` porque lá o zero significa outra coisa — pool sem profundidade
+ * apurável, que é descartado mesmo.
+ */
+function stableUnits(asset: LendingAssetId, rawBalance: bigint): number | null {
+  const decimals = USD_STABLE_DECIMALS[asset];
+  if (decimals === undefined) return null;
+  const value = Number(rawBalance) / 10 ** decimals;
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+}
+
+/**
+ * Monta a leitura de liquidez a partir dos saldos brutos que o protocolo já
+ * expôs na MESMA chamada que trouxe a taxa. Puro — a aritmética fica testável
+ * sem RPC, e os dois leitores (Aave e Compound) compartilham as mesmas guardas
+ * em vez de cada um reimplementar as suas.
+ *
+ * `utilizationBps` não tem unidade, então vale pra WETH também; os campos em USD
+ * seguem a restrição de stablecoin de `onchainDepthUsd` acima.
+ *
+ * Devolve `undefined` (não um objeto com zeros) quando o mercado não tem nada
+ * fornecido: `emprestado ÷ 0` não é 0% de utilização, é indefinido — e servir 0
+ * ali significaria "totalmente líquido", o oposto do que se sabe.
+ */
+export function marketLiquidity(
+  asset: LendingAssetId,
+  suppliedRaw: bigint,
+  borrowedRaw: bigint,
+): MarketLiquidity | undefined {
+  if (suppliedRaw <= 0n || borrowedRaw < 0n) return undefined;
+  // Clamp: juro acumulado pode deixar o emprestado marginalmente acima do
+  // fornecido por um instante. 100% de utilização e zero sacável é a leitura
+  // honesta desse estado — melhor que um "disponível" negativo.
+  const borrowed = borrowedRaw > suppliedRaw ? suppliedRaw : borrowedRaw;
+  const available = suppliedRaw - borrowed;
+
+  return {
+    utilizationBps: Number((borrowed * 10_000n) / suppliedRaw),
+    availableLiquidityUsd: stableUnits(asset, available),
+    totalSuppliedUsd: stableUnits(asset, suppliedRaw),
+  };
 }

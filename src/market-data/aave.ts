@@ -3,7 +3,7 @@ import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
 import { readIncentiveComponent } from "./incentives.js";
-import { onchainDepthUsd } from "./depth.js";
+import { marketLiquidity, onchainDepthUsd } from "./depth.js";
 import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -52,6 +52,10 @@ async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateRea
   // mercado, direto dos livros do protocolo — sem chamada extra. Ver
   // onchainDepthUsd sobre por que só vale pra stablecoin.
   const onchainTvlUsd = onchainDepthUsd(asset, data[2]);
+  // Utilização e liquidez sacável saem do MESMO tuple já lido — `totalAToken`
+  // (2) contra a soma das duas dívidas (3 = estável, 4 = variável). Nenhuma
+  // chamada RPC nova: o dado sempre esteve na resposta e era descartado.
+  const liquidity = marketLiquidity(asset, data[2], data[3] + data[4]);
 
   return {
     protocol: "aave",
@@ -64,6 +68,7 @@ async function readAaveSupplyApyUncached(asset: LendingAssetId): Promise<RateRea
     tvlUsd: onchainTvlUsd ?? incentive.tvlUsd,
     tvlBasis: onchainTvlUsd !== null ? "total-supplied" : incentive.tvlUsd !== null ? "aggregator-reported" : null,
     source: "onchain",
+    ...(liquidity ? { liquidity } : {}),
     readAt: new Date(),
   };
 }

@@ -181,9 +181,17 @@ GET https://yieldsignal.vercel.app${ASSET_ROUTES.WETH}</pre>
 <pre>GET /decision/eth-staking-yield?position=lido&amp;amountUsd=25000&amp;horizonDays=30</pre>
 <p>The signal endpoints answer “what pays best right now”. The decision endpoints answer “given where my money already sits, is moving it worth the cost?” — returning MOVE/HOLD with expected net gain, break-even in days and a confidence tier, deterministic from the signed signal so you can reproduce it locally.</p>
 
+<h2>Is the yield real? (durability)</h2>
+<pre>GET /durability/weth-base-yield</pre>
+<p>Splits every protocol's APY into base interest vs incentive and reports the <strong>post-incentive floor</strong> — what you keep if the reward campaign stops. On a real reading, the WETH leader paid 299bps of which 57.9% was incentive (floor 126bps), while the runner-up's 153bps was entirely base: <strong>the ranking flips without incentives</strong>. Only sources that itemize the reward component are decomposed; the rest are named as <code>undecomposable</code> and never assumed incentive-free, and no ranking claim is made when the current leader is one of them. A stress test of readings taken now — deliberately <em>not</em> a forecast of when a campaign ends. Base lending only: the five liquid-staking sources report no itemized incentive component, so there would be nothing to decompose.</p>
+
+<h2>Can you actually get out? (capacity)</h2>
+<pre>GET /capacity/usdc-base-yield?amountUsd=200000</pre>
+<p>A market at 99% utilization pays beautifully and will not let you withdraw — the high rate <em>is</em> the symptom. This endpoint reads utilization and free liquidity straight from the protocol's own books (Aave, Compound) and tells you whether your size can exit right now and what share of the market it would be. Protocols that don't publish borrowed-vs-supplied are marked <code>unmeasured</code> and are never returned as executable.</p>
+
 <h2>MCP</h2>
 <pre>POST https://yieldsignal.vercel.app/mcp</pre>
-<p>Tools <code>get_yield_signal</code> and <code>get_yield_decision</code> (optional <code>asset</code>: <code>"ETH_STAKING"</code>, <code>"USDC"</code> or <code>"WETH"</code>), gated per-call via <a href="https://www.npmjs.com/package/@x402/mcp">@x402/mcp</a> — <code>tools/list</code>/<code>initialize</code> stay free, only the tool call is paid. Also available as an <a href="https://www.npmjs.com/package/elizaos-plugin-yieldsignal">elizaOS plugin</a>.</p>
+<p>Tools <code>get_yield_signal</code> and <code>get_yield_decision</code> (optional <code>asset</code>: <code>"ETH_STAKING"</code>, <code>"USDC"</code> or <code>"WETH"</code>), plus <code>get_yield_durability</code> and <code>get_exit_capacity</code> (Base lending only: <code>"USDC"</code> or <code>"WETH"</code>), gated per-call via <a href="https://www.npmjs.com/package/@x402/mcp">@x402/mcp</a> — <code>tools/list</code>/<code>initialize</code> stay free, only the tool call is paid. Also available as an <a href="https://www.npmjs.com/package/elizaos-plugin-yieldsignal">elizaOS plugin</a>.</p>
 
 <h2>Every reading is source-tagged</h2>
 <pre>{

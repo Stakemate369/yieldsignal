@@ -13,7 +13,9 @@ import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
 import { decideMove } from "./signal/decideMove.js";
 import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
-import { ASSET_IDS } from "./market-data/types.js";
+import { ASSET_IDS, LENDING_ASSET_IDS } from "./market-data/types.js";
+import { computeDurability } from "./signal/durability.js";
+import { computeCapacity } from "./signal/capacity.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
 import { recordUsage } from "./usage/usageStore.js";
@@ -26,11 +28,39 @@ const TOOL_DESCRIPTION =
 const DECISION_TOOL_DESCRIPTION =
   "Buyer-side MOVE/HOLD decision (Layer 1 premium — sells the decision, not the raw datapoint). Given your current position, size, move cost and horizon, returns whether moving your capital to the best risk-adjusted protocol pays for itself now — with expected net gain, break-even days and a confidence tier. Deterministic from the underlying signal, which is EIP-712 signed and returned in a sibling content block (re-run the decision locally to reproduce it). Priced above the plain signal tool.";
 
+const DURABILITY_TOOL_DESCRIPTION =
+  "How much of the current APY survives if incentives stop. Splits each protocol's yield into base interest vs reward/incentive, reports the post-incentive floor, and says whether the leader changes without incentives. Only protocols whose source itemizes the reward component are decomposed — the rest are listed as undecomposable and NEVER assumed incentive-free, and no ranking claim is made when the current leader is one of them. Also returns bestVerifiableFloor: the highest yield provably independent of incentives. A stress test of readings taken now, not a forecast of when a campaign ends.";
+
+const CAPACITY_TOOL_DESCRIPTION =
+  "Exit capacity for a Base lending market: per-protocol utilization and withdrawable liquidity read from the protocol's own books (Aave, Compound), plus — if you pass amountUsd — whether that size can be withdrawn right now and what share of the market it would be. High APY at high utilization means the market pays well and will not let you out; this tool separates the two. Protocols that do not expose borrowed-vs-supplied are marked unmeasured and are never recommended as executable. USDC only for USD figures; WETH returns utilization without USD (no price oracle in the paid path).";
+
 const TOOL_INPUT_SHAPE = {
   asset: z
     .enum(ASSET_IDS)
     .optional()
     .describe("Which yield signal to fetch: USDC/WETH lending APY on Base, or ETH_STAKING liquid staking APY on Ethereum mainnet. Defaults to USDC."),
+};
+
+const DURABILITY_INPUT_SHAPE = {
+  asset: z
+    .enum(LENDING_ASSET_IDS)
+    .optional()
+    .describe("Which Base lending market to stress-test: USDC or WETH. Defaults to USDC."),
+};
+
+const CAPACITY_INPUT_SHAPE = {
+  // Enum restrito a LENDING_ASSET_IDS de propósito: pedir capacidade de
+  // ETH_STAKING é uma pergunta sem resposta (staking não tem mercado de
+  // empréstimo), e é melhor o schema recusar do que a tool cobrar e devolver
+  // tudo `null`.
+  asset: z
+    .enum(LENDING_ASSET_IDS)
+    .optional()
+    .describe("Which Base lending market to measure: USDC (full USD figures) or WETH (utilization only). Defaults to USDC."),
+  amountUsd: z
+    .number()
+    .optional()
+    .describe("Position size in USD to test for exit. Omit to get utilization and free liquidity without an exit verdict."),
 };
 
 const DECISION_INPUT_SHAPE = {
@@ -117,8 +147,6 @@ export async function createMcpRequestHandler(
         try {
           // Toda chamada aqui é paga — `paidSignal()` só passa depois que o
           // pagamento liquidou (o MCP não tem free trial, ao contrário do REST).
-          logger.info({ channel: "mcp", asset }, "sinal servido");
-          await recordUsage({ kind: "served", route: "signal", channel: "mcp", asset });
           const readings = await collectRates(asset);
           const signal = computeSignal(readings);
           // Bloco de texto original SEM alteração (é o que fica assinado) +
@@ -140,6 +168,13 @@ export async function createMcpRequestHandler(
               }),
             });
           }
+          // Contado só aqui, DEPOIS de tudo que pode falhar (leitura +
+          // assinatura) — mesma correção já aplicada no REST (ver
+          // expressApp.ts#respondWithSignal): registrar antes fazia o MESMO
+          // pedido entrar como served E failed quando a leitura estourava,
+          // inflando o topo do funil.
+          logger.info({ channel: "mcp", asset }, "sinal servido");
+          await recordUsage({ kind: "served", route: "signal", channel: "mcp", asset });
           return { content };
         } catch (err) {
           logger.error({ err, asset }, "falha gerando sinal (MCP)");
@@ -167,8 +202,6 @@ export async function createMcpRequestHandler(
           };
         }
         try {
-          logger.info({ channel: "mcp-decision", asset }, "decisão servida");
-          await recordUsage({ kind: "served", route: "decision", channel: "mcp", asset });
           const readings = await collectRates(asset);
           const decision = decideMove(readings, parsed.input);
           // Assina o SINAL embutido (mesmo contrato do REST /decision/*): a
@@ -193,6 +226,9 @@ export async function createMcpRequestHandler(
               }),
             });
           }
+          // Contado depois de tudo que pode falhar — ver a nota em get_yield_signal.
+          logger.info({ channel: "mcp-decision", asset }, "decisão servida");
+          await recordUsage({ kind: "served", route: "decision", channel: "mcp", asset });
           return { content };
         } catch (err) {
           logger.error({ err, asset }, "falha gerando decisão (MCP)");
@@ -201,6 +237,79 @@ export async function createMcpRequestHandler(
             isError: true,
           };
         }
+      }),
+    );
+
+    /**
+     * Tools analíticas (2026-08-05). Preço BASE (`paidSignal`), não o premium da
+     * decisão — produtos novos ainda sem track record próprio; primeiro o
+     * histórico verificável, depois o preço.
+     *
+     * As duas assinam o SINAL derivado das mesmas leituras, mesmo contrato já
+     * usado por `get_yield_decision`: o relatório é função determinística do
+     * sinal, então assinar o sinal (devolvido verbatim em `signedSignalText`)
+     * deixa o comprador reproduzir a derivação e conferir sem struct novo.
+     */
+    async function derivedToolResult<T>(
+      asset: (typeof ASSET_IDS)[number],
+      route: "durability" | "capacity",
+      derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T,
+    ) {
+      try {
+        const readings = await collectRates(asset);
+        const signal = computeSignal(readings);
+        const rawSignal = JSON.stringify(signal);
+        const signed = await signPayload(signer, rawSignal, signal);
+        const content = [{ type: "text" as const, text: JSON.stringify(derive(readings)) }];
+        if (signed) {
+          content.push({
+            type: "text" as const,
+            text: JSON.stringify({
+              verification:
+                "EIP-712 typed data signature over the underlying signal. eip712.message.contentHash is keccak256 of signedSignalText, verbatim. The report in the previous block is a deterministic function of the same readings — recompute it locally to reproduce.",
+              signature: signed.signature,
+              signer: signed.signer,
+              eip712: eip712ForTransport(signed.eip712),
+              signedSignalText: rawSignal,
+            }),
+          });
+        }
+        // Contado depois de tudo que pode falhar — ver a nota em get_yield_signal.
+        logger.info({ channel: `mcp-${route}`, asset }, "relatório derivado servido");
+        await recordUsage({ kind: "served", route, channel: "mcp", asset });
+        return { content };
+      } catch (err) {
+        logger.error({ err, asset, route }, "falha gerando relatório derivado (MCP)");
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: "falha temporária lendo taxas" }) }],
+          isError: true,
+        };
+      }
+    }
+
+    mcpServer.tool(
+      "get_yield_durability",
+      DURABILITY_TOOL_DESCRIPTION,
+      // Enum restrito a lending pelo mesmo motivo da tool de capacidade: os 5
+      // protocolos de staking vêm da DefiLlama sem componente de incentivo
+      // itemizado, então ETH_STAKING seria 0 de 5 decomponíveis em toda chamada.
+      DURABILITY_INPUT_SHAPE,
+      paidSignal(async ({ asset = "USDC" }) =>
+        derivedToolResult(asset, "durability", (readings) => computeDurability(asset, readings)),
+      ),
+    );
+
+    mcpServer.tool(
+      "get_exit_capacity",
+      CAPACITY_TOOL_DESCRIPTION,
+      CAPACITY_INPUT_SHAPE,
+      paidSignal(async ({ asset = "USDC", amountUsd }) => {
+        // `amountUsd` inválido (negativo/NaN) vira "sem veredito" em vez de erro:
+        // diferente da decisão, aqui o parâmetro é OPCIONAL — a resposta sem ele
+        // continua sendo útil (utilização e liquidez livre), então recusar a
+        // chamada inteira depois de o comprador já ter pago seria pior.
+        const amount = typeof amountUsd === "number" && Number.isFinite(amountUsd) && amountUsd > 0 ? amountUsd : null;
+        return derivedToolResult(asset, "capacity", (readings) => computeCapacity(asset, readings, amount));
       }),
     );
 

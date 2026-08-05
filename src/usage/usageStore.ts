@@ -43,7 +43,7 @@ export type UsageKind =
   /** Rota inexistente — mede quanto do tráfego erra o caminho. */
   | "not_found";
 
-export type UsageRoute = "signal" | "decision" | "other";
+export type UsageRoute = "signal" | "decision" | "durability" | "capacity" | "other";
 export type UsageChannel = "rest" | "mcp";
 
 export interface UsageEvent {
@@ -64,6 +64,11 @@ export function routeFromResourceUrl(url: string | undefined): UsageRoute {
   if (!url) return "other";
   if (url.includes("/decision/")) return "decision";
   if (url.includes("/signal/")) return "signal";
+  // Produtos analíticos (2026-08-05). Sem estas duas linhas toda venda de
+  // durabilidade/capacidade cairia em "other" e o funil não saberia dizer QUAL
+  // produto novo vendeu — que é a única pergunta que justifica tê-los lançado.
+  if (url.includes("/durability/")) return "durability";
+  if (url.includes("/capacity/")) return "capacity";
   return "other";
 }
 

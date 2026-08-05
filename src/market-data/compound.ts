@@ -3,7 +3,7 @@ import { basePublicClient } from "./client.js";
 import { compoundedRateToApyBps } from "./apyMath.js";
 import { cachedWithTtl } from "./cache.js";
 import { readIncentiveComponent } from "./incentives.js";
-import { onchainDepthUsd } from "./depth.js";
+import { marketLiquidity, onchainDepthUsd } from "./depth.js";
 import type { LendingAssetId, RateReading } from "./types.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -66,10 +66,19 @@ async function readCompoundSupplyApyUncached(asset: LendingAssetId): Promise<Rat
   // Profundidade dos próprios livros. Best-effort de propósito: a taxa é o
   // produto, a profundidade é contexto — uma falha aqui não pode derrubar a
   // resposta paga, só deixa o campo cair no agregador (ou em null).
-  const onchainTvlUsd = await basePublicClient
+  const totalSupplyRaw = await basePublicClient
     .readContract({ address: comet, abi: COMET_ABI, functionName: "totalSupply" })
-    .then((total) => onchainDepthUsd(asset, total))
     .catch(() => null);
+
+  const onchainTvlUsd = totalSupplyRaw !== null ? onchainDepthUsd(asset, totalSupplyRaw) : null;
+  // O Comet não expõe `totalBorrow` no fragmento que já usamos, mas
+  // `getUtilization()` (lido acima pra taxa) É emprestado ÷ fornecido escalado
+  // em 1e18 — então o emprestado sai dos dois números que já temos em mãos, sem
+  // ABI nova nem chamada extra. Derivado, não estimado.
+  const liquidity =
+    totalSupplyRaw !== null
+      ? marketLiquidity(asset, totalSupplyRaw, (totalSupplyRaw * utilization) / FACTOR_SCALE)
+      : undefined;
 
   return {
     protocol: "compound",
@@ -82,6 +91,7 @@ async function readCompoundSupplyApyUncached(asset: LendingAssetId): Promise<Rat
     tvlUsd: onchainTvlUsd ?? incentive.tvlUsd,
     tvlBasis: onchainTvlUsd !== null ? "total-supplied" : incentive.tvlUsd !== null ? "aggregator-reported" : null,
     source: "onchain",
+    ...(liquidity ? { liquidity } : {}),
     readAt: new Date(),
   };
 }

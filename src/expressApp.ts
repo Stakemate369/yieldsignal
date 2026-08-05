@@ -14,11 +14,13 @@ import { collectRates } from "./signal/collectRates.js";
 import { computeSignal } from "./signal/computeSignal.js";
 import { decideMove } from "./signal/decideMove.js";
 import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
+import { computeDurability } from "./signal/durability.js";
+import { computeCapacity } from "./signal/capacity.js";
 import { computeAccuracyScore } from "./attestation/accuracyScore.js";
 import { computeWindowedAccuracy } from "./attestation/windowedAccuracy.js";
 import { fetchSignalAttestations } from "./attestation/queryAttestations.js";
 import { GUARANTEE_TERMS } from "./guarantee/terms.js";
-import type { AssetId } from "./market-data/types.js";
+import type { AssetId, LendingAssetId } from "./market-data/types.js";
 import { FLAGSHIP_ASSET } from "./market-data/types.js";
 import { cachedWithTtl } from "./market-data/cache.js";
 import { createMcpRequestHandler } from "./mcp.js";
@@ -60,6 +62,43 @@ export const DECISION_PATHS: Record<AssetId, string> = {
   ETH_STAKING: "/decision/eth-staking-yield",
   USDC: "/decision/usdc-base-yield",
   WETH: "/decision/weth-base-yield",
+};
+
+// CAMADA 1 (analítica): rotas de DURABILIDADE — "quanto desta APY sobra se o
+// incentivo parar?". Ver signal/durability.ts sobre por que NÃO existe previsão
+// de data aqui.
+//
+// Só LendingAssetId, e a razão é medida, não estética: checado ao vivo em
+// 2026-08-05, os CINCO protocolos de staking (lido, rocket-pool,
+// coinbase-wrapped-staked-eth, frax-ether, binance-staked-eth) vêm da DefiLlama
+// com `apyReward: null` — ou seja, 0 de 5 decomponíveis, sempre. A rota de
+// ETH_STAKING cobraria pra devolver "não consigo afirmar nada" em toda chamada.
+// (Que staking não TENHA incentivo é plausível e até provável, mas `apyReward`
+// ausente não prova ausência de incentivo — é a mesma inferência que este
+// serviço se recusa a fazer pra fluid/morpho no lending.)
+export const DURABILITY_PATHS: Record<LendingAssetId, string> = {
+  USDC: "/durability/usdc-base-yield",
+  WETH: "/durability/weth-base-yield",
+};
+
+// CAMADA 1 (analítica): rotas de CAPACIDADE — "eu consigo sair deste mercado?".
+// Só LendingAssetId: utilização e liquidez livre saem dos livros de um mercado
+// de EMPRÉSTIMO (Aave/Compound). Staking líquido não tem mercado equivalente —
+// a saída lá é resgate/swap, outra pergunta e outra fonte. Vender uma rota de
+// capacidade pra ETH_STAKING seria cobrar por uma resposta toda em `null`.
+export const CAPACITY_PATHS: Record<LendingAssetId, string> = {
+  USDC: "/capacity/usdc-base-yield",
+  WETH: "/capacity/weth-base-yield",
+};
+
+const DURABILITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
+  USDC: "How much of the USDC lending APY on Base survives if incentives stop: per-protocol base-vs-reward split, the post-incentive floor, and whether the leader changes without incentives. Derived only from reported/inferred reward components already read — sources that do not itemize are listed as undecomposable, never assumed incentive-free. A stress test of current readings, not a date forecast.",
+  WETH: "How much of the WETH lending APY on Base survives if incentives stop — same contract as the USDC durability route, for WETH. Undecomposable sources are named, never assumed incentive-free. Stress test of current readings, not a date forecast.",
+};
+
+const CAPACITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
+  USDC: "Exit capacity for USDC lending on Base: per-protocol utilization and withdrawable liquidity read from the protocol's own books (Aave, Compound), plus whether your size (?amountUsd=) can be withdrawn right now and what share of the market it would be. Protocols that do not expose borrowed-vs-supplied are marked unmeasured, never assumed liquid.",
+  WETH: "Exit capacity for WETH lending on Base — same contract as the USDC capacity route. Utilization is reported for every measured protocol; USD figures are omitted for WETH (no price oracle in the paid path), so size verdicts need the USDC route. Unmeasured protocols are named, never assumed liquid.",
 };
 
 const DECISION_DESCRIPTIONS: Record<AssetId, string> = {
@@ -106,13 +145,27 @@ const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
  * `test/routeDescriptionLimit.test.ts` leem daqui, pra que o teste meça o mesmo
  * texto que o comprador recebe em vez de uma cópia que pode divergir.
  */
-export const FINAL_DESCRIPTIONS: { signal: Record<AssetId, string>; decision: Record<AssetId, string> } = {
+export const FINAL_DESCRIPTIONS: {
+  signal: Record<AssetId, string>;
+  decision: Record<AssetId, string>;
+  durability: Record<LendingAssetId, string>;
+  capacity: Record<LendingAssetId, string>;
+} = {
   signal: Object.fromEntries(
     (Object.keys(ROUTE_DESCRIPTIONS) as AssetId[]).map((a) => [a, ROUTE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
   ) as Record<AssetId, string>,
   decision: Object.fromEntries(
     (Object.keys(DECISION_DESCRIPTIONS) as AssetId[]).map((a) => [a, DECISION_DESCRIPTIONS[a] + ACCURACY_POINTER]),
   ) as Record<AssetId, string>,
+  durability: Object.fromEntries(
+    (Object.keys(DURABILITY_DESCRIPTIONS) as LendingAssetId[]).map((a) => [
+      a,
+      DURABILITY_DESCRIPTIONS[a] + ACCURACY_POINTER,
+    ]),
+  ) as Record<LendingAssetId, string>,
+  capacity: Object.fromEntries(
+    (Object.keys(CAPACITY_DESCRIPTIONS) as LendingAssetId[]).map((a) => [a, CAPACITY_DESCRIPTIONS[a] + ACCURACY_POINTER]),
+  ) as Record<LendingAssetId, string>,
 };
 
 /**
@@ -146,6 +199,18 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
         `GET ${DECISION_PATHS[asset]}`,
         { price: env.DECISION_PRICE_USD, description: FINAL_DESCRIPTIONS.decision[asset] },
+      ]),
+      // Durabilidade e capacidade entram no preço BASE (PRICE_USD), não no
+      // premium da decisão: são produtos novos, sem track record próprio ainda.
+      // Cobrar preço de decisão por algo que ninguém comprou nem verificou
+      // inverteria a ordem — primeiro o histórico verificável, depois o preço.
+      ...(Object.keys(DURABILITY_PATHS) as LendingAssetId[]).map((asset) => [
+        `GET ${DURABILITY_PATHS[asset]}`,
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.durability[asset] },
+      ]),
+      ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((asset) => [
+        `GET ${CAPACITY_PATHS[asset]}`,
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.capacity[asset] },
       ]),
     ]),
   });
@@ -505,10 +570,87 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     }
   }
 
+  /**
+   * Serve durabilidade e capacidade. As duas compartilham o mesmo esqueleto —
+   * coletar leituras uma vez, derivar o relatório, assinar o SINAL embutido —
+   * então o esqueleto vive aqui e cada rota só passa a função que deriva.
+   *
+   * A assinatura cobre o sinal, não o corpo inteiro, pelo MESMO motivo já
+   * documentado nas rotas de decisão: o relatório é função determinística das
+   * mesmas leituras, então assinar o sinal (que vai embutido no corpo, em
+   * `signal`) já deixa o comprador reexecutar a derivação e conferir. Um struct
+   * EIP-712 novo por produto exigiria schema novo e não provaria mais nada.
+   */
+  async function respondWithDerived<T>(
+    res: express.Response,
+    asset: AssetId,
+    route: "durability" | "capacity",
+    derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T,
+  ): Promise<void> {
+    try {
+      const readings = await collectRates(asset);
+      const signal = computeSignal(readings);
+      const body = { ...derive(readings), signal };
+      const rawSignal = JSON.stringify(signal);
+      const signed = await signPayload(signer, rawSignal, signal);
+      if (signed) {
+        res.setHeader("X-Signal-Signature", signed.signature);
+        res.setHeader("X-Signal-Signer", signed.signer);
+        res.setHeader("X-Signal-Eip712-Payload", JSON.stringify(eip712ForTransport(signed.eip712)));
+      }
+      await recordUsage({ kind: "served", route, channel: "rest", asset });
+      res.type("application/json").send(JSON.stringify(body));
+    } catch (err) {
+      logger.error({ err, asset, route }, "falha gerando relatório derivado");
+      await recordUsage({ kind: "failed", route, channel: "rest", asset });
+      res.status(503).json({ error: "falha temporária lendo taxas — tente de novo em instantes" });
+    }
+  }
+
+  /**
+   * `?amountUsd=` da rota de capacidade. Ausente é VÁLIDO (a rota ainda entrega
+   * utilização e liquidez livre por protocolo, só não emite veredito de saída);
+   * presente e inválido é 400, mesma disciplina de `parseDecisionQuery` — um
+   * número que não dá pra confiar não pode virar veredito de "você consegue
+   * sacar", que é literalmente a afirmação que esta rota existe pra sustentar.
+   */
+  function parseAmountUsd(raw: unknown): { ok: true; amountUsd: number | null } | { ok: false; error: string } {
+    if (raw === undefined || raw === "") return { ok: true, amountUsd: null };
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      return { ok: false, error: "amountUsd must be a positive number when provided" };
+    }
+    return { ok: true, amountUsd: n };
+  }
+
+  async function respondWithCapacity(
+    res: express.Response,
+    asset: LendingAssetId,
+    query: Record<string, unknown>,
+  ): Promise<void> {
+    const parsed = parseAmountUsd(query.amountUsd);
+    if (!parsed.ok) {
+      try {
+        await recordUsage({ kind: "failed", route: "capacity", channel: "rest", asset, outcome: "bad_request" });
+      } catch {
+        /* telemetria nunca altera a resposta */
+      }
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    await respondWithDerived(res, asset, "capacity", (readings) =>
+      computeCapacity(asset, readings, parsed.amountUsd),
+    );
+  }
+
   // Fato de uso — cobre TAMBÉM as chamadas grátis, que o hook de settlement
   // (acima) nunca vê. É essa linha, não a de pagamento, que responde "isso
   // está sendo usado?" antes mesmo de dar receita.
-  function logUsage(asset: AssetId, freeTrial: boolean, channel: "rest" | "rest-decision" = "rest"): void {
+  function logUsage(
+    asset: AssetId,
+    freeTrial: boolean,
+    channel: "rest" | "rest-decision" | "rest-durability" | "rest-capacity" = "rest",
+  ): void {
     logger.info({ channel, asset, freeTrial }, "sinal servido");
   }
 
@@ -578,6 +720,61 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     );
   }
 
+  // Rotas de DURABILIDADE e CAPACIDADE — mesmo padrão free-trial + pagamento
+  // das rotas acima. Registradas em loops separados porque CAPACITY_PATHS é
+  // indexado por LendingAssetId (não tem ETH_STAKING — ver a nota na constante).
+  for (const asset of Object.keys(DURABILITY_PATHS) as LendingAssetId[]) {
+    app.get(
+      DURABILITY_PATHS[asset],
+      usageEntryMiddleware("durability", asset),
+      (req, res, next) => {
+        if (req.query.trial !== "1") {
+          next();
+          return;
+        }
+        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
+        if (consumeFreeTrial(ip)) {
+          res.setHeader("X-Free-Trial", "true");
+          logUsage(asset, true, "rest-durability");
+          void respondWithDerived(res, asset, "durability", (readings) => computeDurability(asset, readings));
+          return;
+        }
+        next();
+      },
+      paymentMiddlewareFromHTTPServer(server),
+      async (_req, res) => {
+        logUsage(asset, false, "rest-durability");
+        await respondWithDerived(res, asset, "durability", (readings) => computeDurability(asset, readings));
+      },
+    );
+  }
+
+  for (const asset of Object.keys(CAPACITY_PATHS) as LendingAssetId[]) {
+    app.get(
+      CAPACITY_PATHS[asset],
+      usageEntryMiddleware("capacity", asset),
+      (req, res, next) => {
+        if (req.query.trial !== "1") {
+          next();
+          return;
+        }
+        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
+        if (consumeFreeTrial(ip)) {
+          res.setHeader("X-Free-Trial", "true");
+          logUsage(asset, true, "rest-capacity");
+          void respondWithCapacity(res, asset, req.query as Record<string, unknown>);
+          return;
+        }
+        next();
+      },
+      paymentMiddlewareFromHTTPServer(server),
+      async (req, res) => {
+        logUsage(asset, false, "rest-capacity");
+        await respondWithCapacity(res, asset, req.query as Record<string, unknown>);
+      },
+    );
+  }
+
   // Aliases curtos → caminho canônico. Um comprador (humano ou agente) que
   // adivinha o óbvio `/decision/usdc` em vez de `/decision/usdc-base-yield`
   // recebia um 404 mudo; agora é redirecionado (308 preserva método e query)
@@ -596,6 +793,18 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     // recebia 404; agora cai no produto mais defensável do catálogo.
     "/signal": RESOURCE_PATHS[FLAGSHIP_ASSET],
     "/decision": DECISION_PATHS[FLAGSHIP_ASSET],
+    "/durability/usdc": DURABILITY_PATHS.USDC,
+    "/durability/weth": DURABILITY_PATHS.WETH,
+    // Como `/capacity` abaixo: resolve pra USDC e NÃO pro FLAGSHIP_ASSET,
+    // porque ETH_STAKING não tem rota de durabilidade (ver DURABILITY_PATHS).
+    "/durability": DURABILITY_PATHS.USDC,
+    "/capacity/usdc": CAPACITY_PATHS.USDC,
+    "/capacity/weth": CAPACITY_PATHS.WETH,
+    // `/capacity` sem asset resolve pra USDC, NÃO pro FLAGSHIP_ASSET como as
+    // outras famílias: o asset de vitrine é ETH_STAKING, que de propósito não
+    // tem rota de capacidade (staking não é mercado de empréstimo). Apontar pro
+    // flagship aqui geraria um 404 justamente no chute mais provável.
+    "/capacity": CAPACITY_PATHS.USDC,
   };
   for (const [alias, canonical] of Object.entries(SHORT_ALIASES)) {
     app.get(alias, (req, res) => {
@@ -631,6 +840,8 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       endpoints: {
         signal: Object.values(RESOURCE_PATHS),
         decision: Object.values(DECISION_PATHS),
+        durability: Object.values(DURABILITY_PATHS),
+        capacity: Object.values(CAPACITY_PATHS),
         free: [
           "/accuracy.json",
           "/track-record.json",

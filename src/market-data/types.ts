@@ -48,6 +48,15 @@ export type AssetId = LendingAssetId | "ETH_STAKING";
 export const ASSET_IDS = ["ETH_STAKING", "USDC", "WETH"] as const satisfies readonly AssetId[];
 
 /**
+ * Subconjunto vendável de produtos que só fazem sentido num mercado de
+ * EMPRÉSTIMO (hoje: a rota/tool de capacidade de saída). Mesma razão de existir
+ * de ASSET_IDS — uma lista canônica em vez de cópias hand-kept-in-sync. Staking
+ * líquido fica fora porque não tem mercado de empréstimo equivalente: lá a saída
+ * é resgate/swap, outra pergunta e outra fonte de dado.
+ */
+export const LENDING_ASSET_IDS = ["USDC", "WETH"] as const satisfies readonly LendingAssetId[];
+
+/**
  * Asset "cabeça de vitrine": o que a página inicial lidera, o que os aliases
  * curtos sem asset (`/signal`, `/decision`) resolvem, e o primeiro da lista de
  * endpoints devolvida num 404.
@@ -83,6 +92,35 @@ export const FLAGSHIP_ASSET: AssetId = "ETH_STAKING";
  * da APY de WETH na Euler), isso é comparar coisas diferentes e ranquear errado.
  */
 export const APY_BASIS = "supply-apy-total-incl-rewards" as const;
+
+/**
+ * Liquidez e utilização do mercado, lidas dos livros do PRÓPRIO protocolo.
+ *
+ * Responde a pergunta que nem `supplyApyBps` nem `tvlUsd` respondem: "eu
+ * consigo SAIR?". Um mercado a 99% de utilização paga muito bem e não deixa
+ * você sacar — a taxa alta é justamente o sintoma. `tvlUsd` sozinho não separa
+ * os dois casos: US$ 100M depositados com US$ 99M emprestados e US$ 100M
+ * depositados com US$ 10M emprestados dão o mesmo número.
+ *
+ * Só existe onde o protocolo expõe fornecido E emprestado na MESMA leitura que
+ * a taxa já fazia (Aave: tuple do `getReserveData`; Compound: `getUtilization`
+ * + `totalSupply`, ambos já lidos) — zero chamada RPC nova. Ausente (campo
+ * `undefined`) em Morpho (a API só devolve `totalAssetsUsd`, sem emprestado) e
+ * em toda a Camada 2 (a DefiLlama não publica utilização). Ausente significa
+ * "este leitor não mede isso", nunca "o mercado é líquido".
+ */
+export interface MarketLiquidity {
+  /** Emprestado ÷ fornecido, em bps (10000 = 100%). Sem unidade, então vale pra qualquer asset. */
+  utilizationBps: number;
+  /**
+   * Quanto dá pra sacar agora, em USD. `null` fora de stablecoin — converter um
+   * saldo de WETH em dólar exigiria um oráculo de preço dentro do caminho de uma
+   * resposta paga (mesma limitação, e mesmo motivo, de `market-data/depth.ts`).
+   */
+  availableLiquidityUsd: number | null;
+  /** Total fornecido em USD, mesma restrição de stablecoin do campo acima. */
+  totalSuppliedUsd: number | null;
+}
 
 export interface RateReading {
   protocol: ProtocolId;
@@ -139,5 +177,11 @@ export interface RateReading {
    */
   tvlBasis: "total-supplied" | "aggregator-reported" | null;
   source: "onchain" | "api" | "defillama";
+  /**
+   * Liquidez/utilização quando o leitor consegue medir — ver `MarketLiquidity`.
+   * Opcional de propósito: campo ausente distingue "não medido por esta fonte"
+   * de "medido e deu zero", mesma disciplina de `apyRewardBps: null`.
+   */
+  liquidity?: MarketLiquidity;
   readAt: Date;
 }

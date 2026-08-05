@@ -1,0 +1,81 @@
+# Deploy de produção na Vercel disparado por push.
+#
+# Existe porque a integração nativa Vercel↔GitHub NÃO está ativa neste projeto:
+# checado em 2026-08-05 via API da Vercel, o projeto não tem link git nenhum
+# (`link: null`) e a conta não tem namespace GitHub conectado — a lista de
+# `git-namespaces` volta vazia. Consequência real: durante 6 dias os pushes não
+# publicaram nada e ninguém percebeu, porque a produção continuava respondendo
+# normalmente com o código antigo. Só apareceu quando uma rota nova deu 404.
+#
+# Reconectar a integração nativa exige um grant de OAuth pelo navegador. Este
+# workflow contorna isso pela CLI, que autentica por token — e tem uma vantagem
+# sobre a integração nativa: o deploy só roda DEPOIS dos testes passarem
+# (`needs: test` via workflow_run), enquanto o auto-deploy da Vercel publica
+# independente do CI.
+#
+# Requer o secret VERCEL_TOKEN no repositório (token com escopo do projeto
+# yieldsignal). ORG/PROJECT ID não são segredo — são identificadores públicos —
+# e ficam aqui em claro de propósito, pra não virar mais um secret pra manter.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  # Botão manual, pra republicar sem precisar de um commit vazio.
+  workflow_dispatch:
+
+env:
+  VERCEL_ORG_ID: team_6ZLAJHlVFEwBoIvDwT0ucQzL
+  VERCEL_PROJECT_ID: prj_H5MYjm6wxVYgrLDT29mSflbNTPzB
+
+jobs:
+  deploy:
+    # Num workflow_run o job roda mesmo com o CI vermelho — o `if` é o que
+    # impede publicar código com teste quebrado. workflow_dispatch não tem
+    # conclusion, por isso o segundo termo.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Em workflow_run o checkout default pega o topo de main, que pode já
+          # ter avançado. Fixa no commit exato que passou no CI.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install --global vercel@latest
+
+      # `pull` traz as env vars de produção pro build local do runner; sem isso
+      # o build sai sem configuração e a função serverless quebra em runtime.
+      - name: Puxar configuração de produção
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Publicar em produção
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      # Prova de que subiu de verdade. Sem este passo o workflow ficaria verde
+      # mesmo publicando um bundle quebrado — que é a mesma cegueira que deixou
+      # os 6 dias de push sem deploy passarem despercebidos.
+      - name: Verificar produção
+        run: |
+          set -euo pipefail
+          for path in /health /durability/usdc-base-yield /capacity/usdc-base-yield; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "https://yieldsignal.vercel.app$path")
+            echo "$path -> HTTP $code"
+            # /health responde 200; as rotas pagas respondem 402 sem pagamento.
+            case "$path:$code" in
+              /health:200|*:402) ;;
+              *) echo "::error::$path devolveu $code — deploy não está saudável"; exit 1 ;;
+            esac
+          done

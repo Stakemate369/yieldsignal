@@ -16,6 +16,8 @@ import { decideMove } from "./signal/decideMove.js";
 import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
 import { computeDurability } from "./signal/durability.js";
 import { computeCapacity } from "./signal/capacity.js";
+import { computeSensitivity } from "./signal/sensitivity.js";
+import { collectBorrowRateCurves } from "./market-data/rateCurve.js";
 import { computeAccuracyScore } from "./attestation/accuracyScore.js";
 import { computeWindowedAccuracy } from "./attestation/windowedAccuracy.js";
 import { fetchSignalAttestations } from "./attestation/queryAttestations.js";
@@ -91,6 +93,20 @@ export const CAPACITY_PATHS: Record<LendingAssetId, string> = {
   WETH: "/capacity/weth-base-yield",
 };
 
+// CAMADA 1 (analítica): rotas de SENSIBILIDADE — "a que distância este mercado
+// está do joelho onde a taxa dispara?". Primeira rota que fala com o lado
+// TOMADOR, não só com o credor. Só LendingAssetId, e só Aave/Compound têm curva
+// legível — ver a nota em market-data/rateCurve.ts sobre Morpho.
+export const SENSITIVITY_PATHS: Record<LendingAssetId, string> = {
+  USDC: "/sensitivity/usdc-base-yield",
+  WETH: "/sensitivity/weth-base-yield",
+};
+
+const SENSITIVITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
+  USDC: "How close USDC lending on Base is to the kink where borrow rates explode: per-protocol utilization, the kink read from the protocol's own rate curve, headroom in bps, and borrow APY at points around it. Aave and Compound only — Morpho's adaptive IRM has no static curve and DefiLlama-sourced protocols expose none, so they are marked unmeasured, never assumed stable. Describes state, not a forecast.",
+  WETH: "How close WETH lending on Base is to the kink where borrow rates explode — same contract as the USDC sensitivity route. Aave and Compound only; protocols without a readable curve are marked unmeasured, never assumed stable. Describes state, not a forecast.",
+};
+
 const DURABILITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
   USDC: "How much of the USDC lending APY on Base survives if incentives stop: per-protocol base-vs-reward split, the post-incentive floor, and whether the leader changes without incentives. Derived only from reported/inferred reward components already read — sources that do not itemize are listed as undecomposable, never assumed incentive-free. A stress test of current readings, not a date forecast.",
   WETH: "How much of the WETH lending APY on Base survives if incentives stop — same contract as the USDC durability route, for WETH. Undecomposable sources are named, never assumed incentive-free. Stress test of current readings, not a date forecast.",
@@ -150,6 +166,7 @@ export const FINAL_DESCRIPTIONS: {
   decision: Record<AssetId, string>;
   durability: Record<LendingAssetId, string>;
   capacity: Record<LendingAssetId, string>;
+  sensitivity: Record<LendingAssetId, string>;
 } = {
   signal: Object.fromEntries(
     (Object.keys(ROUTE_DESCRIPTIONS) as AssetId[]).map((a) => [a, ROUTE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
@@ -165,6 +182,12 @@ export const FINAL_DESCRIPTIONS: {
   ) as Record<LendingAssetId, string>,
   capacity: Object.fromEntries(
     (Object.keys(CAPACITY_DESCRIPTIONS) as LendingAssetId[]).map((a) => [a, CAPACITY_DESCRIPTIONS[a] + ACCURACY_POINTER]),
+  ) as Record<LendingAssetId, string>,
+  sensitivity: Object.fromEntries(
+    (Object.keys(SENSITIVITY_DESCRIPTIONS) as LendingAssetId[]).map((a) => [
+      a,
+      SENSITIVITY_DESCRIPTIONS[a] + ACCURACY_POINTER,
+    ]),
   ) as Record<LendingAssetId, string>,
 };
 
@@ -211,6 +234,10 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${CAPACITY_PATHS[asset]}`,
         { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.capacity[asset] },
+      ]),
+      ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((asset) => [
+        `GET ${SENSITIVITY_PATHS[asset]}`,
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.sensitivity[asset] },
       ]),
     ]),
   });
@@ -584,13 +611,15 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   async function respondWithDerived<T>(
     res: express.Response,
     asset: AssetId,
-    route: "durability" | "capacity",
-    derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T,
+    route: "durability" | "capacity" | "sensitivity",
+    // Aceita derivação assíncrona porque /sensitivity precisa ler a curva de
+    // juros on-chain além das taxas — as outras duas continuam síncronas.
+    derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T | Promise<T>,
   ): Promise<void> {
     try {
       const readings = await collectRates(asset);
       const signal = computeSignal(readings);
-      const body = { ...derive(readings), signal };
+      const body = { ...(await derive(readings)), signal };
       const rawSignal = JSON.stringify(signal);
       const signed = await signPayload(signer, rawSignal, signal);
       if (signed) {
@@ -643,13 +672,31 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     );
   }
 
+  /**
+   * A curva de juros é lida SÓ na rota que a usa, não em `collectRates` — as
+   * outras rotas não pagariam por chamadas RPC que não consomem. Lê a curva de
+   * exatamente os protocolos que apareceram nas leituras, não de uma lista
+   * fixa: se um protocolo foi omitido por falha, não há por que buscar a curva
+   * dele.
+   */
+  async function deriveSensitivity(
+    asset: LendingAssetId,
+    readings: Awaited<ReturnType<typeof collectRates>>,
+  ) {
+    const curves = await collectBorrowRateCurves(
+      asset,
+      readings.map((r) => r.protocol),
+    );
+    return computeSensitivity(asset, readings, curves);
+  }
+
   // Fato de uso — cobre TAMBÉM as chamadas grátis, que o hook de settlement
   // (acima) nunca vê. É essa linha, não a de pagamento, que responde "isso
   // está sendo usado?" antes mesmo de dar receita.
   function logUsage(
     asset: AssetId,
     freeTrial: boolean,
-    channel: "rest" | "rest-decision" | "rest-durability" | "rest-capacity" = "rest",
+    channel: "rest" | "rest-decision" | "rest-durability" | "rest-capacity" | "rest-sensitivity" = "rest",
   ): void {
     logger.info({ channel, asset, freeTrial }, "sinal servido");
   }
@@ -749,6 +796,32 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     );
   }
 
+  for (const asset of Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]) {
+    app.get(
+      SENSITIVITY_PATHS[asset],
+      usageEntryMiddleware("sensitivity", asset),
+      (req, res, next) => {
+        if (req.query.trial !== "1") {
+          next();
+          return;
+        }
+        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
+        if (consumeFreeTrial(ip)) {
+          res.setHeader("X-Free-Trial", "true");
+          logUsage(asset, true, "rest-sensitivity");
+          void respondWithDerived(res, asset, "sensitivity", (readings) => deriveSensitivity(asset, readings));
+          return;
+        }
+        next();
+      },
+      paymentMiddlewareFromHTTPServer(server),
+      async (_req, res) => {
+        logUsage(asset, false, "rest-sensitivity");
+        await respondWithDerived(res, asset, "sensitivity", (readings) => deriveSensitivity(asset, readings));
+      },
+    );
+  }
+
   for (const asset of Object.keys(CAPACITY_PATHS) as LendingAssetId[]) {
     app.get(
       CAPACITY_PATHS[asset],
@@ -805,6 +878,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     // tem rota de capacidade (staking não é mercado de empréstimo). Apontar pro
     // flagship aqui geraria um 404 justamente no chute mais provável.
     "/capacity": CAPACITY_PATHS.USDC,
+    "/sensitivity/usdc": SENSITIVITY_PATHS.USDC,
+    "/sensitivity/weth": SENSITIVITY_PATHS.WETH,
+    // Mesmo motivo de /capacity e /durability: resolve pra USDC, não pro
+    // FLAGSHIP_ASSET, porque staking não tem rota de sensibilidade.
+    "/sensitivity": SENSITIVITY_PATHS.USDC,
   };
   for (const [alias, canonical] of Object.entries(SHORT_ALIASES)) {
     app.get(alias, (req, res) => {
@@ -842,6 +920,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         decision: Object.values(DECISION_PATHS),
         durability: Object.values(DURABILITY_PATHS),
         capacity: Object.values(CAPACITY_PATHS),
+        sensitivity: Object.values(SENSITIVITY_PATHS),
         free: [
           "/accuracy.json",
           "/track-record.json",

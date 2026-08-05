@@ -189,9 +189,13 @@ GET https://yieldsignal.vercel.app${ASSET_ROUTES.WETH}</pre>
 <pre>GET /capacity/usdc-base-yield?amountUsd=200000</pre>
 <p>A market at 99% utilization pays beautifully and will not let you withdraw — the high rate <em>is</em> the symptom. This endpoint reads utilization and free liquidity straight from the protocol's own books (Aave, Compound) and tells you whether your size can exit right now and what share of the market it would be. Protocols that don't publish borrowed-vs-supplied are marked <code>unmeasured</code> and are never returned as executable.</p>
 
+<h2>How close is the repricing? (sensitivity)</h2>
+<pre>GET /sensitivity/usdc-base-yield</pre>
+<p>A lending rate is not a number, it is a function of utilization with a <strong>kink</strong>. Below it the rate creeps; above it, it explodes. Read live on 2026-08-05: Compound's USDC market sat at <strong>89.82% utilization against a kink at 90%</strong> — 0.18 points of headroom — where borrowing goes from 4.08% to 15.95% three points later. Aave had 3.84 points of room on the same asset. This endpoint reads the kink and the slopes from each protocol's own interest rate contract and reports where the market stands on that curve, plus the borrow APY at points around it. It is also the first route that speaks to the <em>borrower</em>, not just the lender. Aave and Compound only: Morpho's adaptive IRM exposes no static curve and the DefiLlama-sourced protocols expose none at all, so they are marked <code>unmeasured</code> — never assumed stable. It describes where the curve is now; it does not predict that utilization will move.</p>
+
 <h2>MCP</h2>
 <pre>POST https://yieldsignal.vercel.app/mcp</pre>
-<p>Tools <code>get_yield_signal</code> and <code>get_yield_decision</code> (optional <code>asset</code>: <code>"ETH_STAKING"</code>, <code>"USDC"</code> or <code>"WETH"</code>), plus <code>get_yield_durability</code> and <code>get_exit_capacity</code> (Base lending only: <code>"USDC"</code> or <code>"WETH"</code>), gated per-call via <a href="https://www.npmjs.com/package/@x402/mcp">@x402/mcp</a> — <code>tools/list</code>/<code>initialize</code> stay free, only the tool call is paid. Also available as an <a href="https://www.npmjs.com/package/elizaos-plugin-yieldsignal">elizaOS plugin</a>.</p>
+<p>Tools <code>get_yield_signal</code> and <code>get_yield_decision</code> (optional <code>asset</code>: <code>"ETH_STAKING"</code>, <code>"USDC"</code> or <code>"WETH"</code>), plus <code>get_yield_durability</code>, <code>get_exit_capacity</code> and <code>get_rate_sensitivity</code> (Base lending only: <code>"USDC"</code> or <code>"WETH"</code>), gated per-call via <a href="https://www.npmjs.com/package/@x402/mcp">@x402/mcp</a> — <code>tools/list</code>/<code>initialize</code> stay free, only the tool call is paid. Also available as an <a href="https://www.npmjs.com/package/elizaos-plugin-yieldsignal">elizaOS plugin</a>.</p>
 
 <h2>Every reading is source-tagged</h2>
 <pre>{

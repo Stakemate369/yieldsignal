@@ -7,7 +7,7 @@ Risk-weighted yield signals for autonomous agents, paid per call via the [x402](
 - **ETH liquid staking** (Ethereum mainnet) across **Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH**
 - **USDC and WETH lending** (Base) across **Aave, Compound, Morpho, Moonwell, Euler and Fluid**
 
-Four products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), and the **capacity** report (can you actually withdraw your size from that market).
+Five products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), the **capacity** report (can you actually withdraw your size from that market), and the **sensitivity** report (how close the market is to the kink where borrow rates explode).
 
 **Live:** `https://yieldsignal.vercel.app`
 
@@ -20,6 +20,7 @@ GET https://yieldsignal.vercel.app/decision/eth-staking-yield?position=lido&amou
 
 GET https://yieldsignal.vercel.app/durability/weth-base-yield
 GET https://yieldsignal.vercel.app/capacity/usdc-base-yield?amountUsd=200000
+GET https://yieldsignal.vercel.app/sensitivity/usdc-base-yield
 ```
 
 Bare `/signal` and `/decision` (no asset) redirect to the ETH staking route — the asset with the strongest verified track record. Short forms like `/signal/usdc` redirect to the canonical path.
@@ -97,6 +98,24 @@ A lending market at 99% utilization pays beautifully and won't let you withdraw;
 Utilization and free liquidity come from the protocol's own books, in the **same call that already fetched the rate** (Aave: the `getReserveData` tuple; Compound: `getUtilization()` + `totalSupply()`), so this costs zero extra RPC. Pass `?amountUsd=` and each protocol reports whether that size can exit now (`canExitNow`), the coverage ratio, and what share of the market it would be.
 
 Morpho and the DefiLlama-sourced protocols don't publish borrowed-vs-supplied, so they're marked `measured: false` and are **never** returned as `bestProtocolExecutable`. Unmeasured is not the same as liquid. USD figures are USDC-only — converting a WETH balance would need a price oracle inside a paid response path; WETH still gets utilization, which is unitless.
+
+### How close is the repricing? — `/sensitivity/*`
+
+A lending rate is not a number, it is a function of utilization with a **kink**. Below it the rate creeps; above it, it explodes. Read live on 2026-08-05:
+
+```
+             utilization   kink   headroom   borrow APY at 90% → 93%
+compound USDC   89.82%      90%    0.18pp        4.08%  →  15.95%
+aave     USDC   86.16%      90%    3.84pp        4.60%  →   7.79%
+```
+
+Compound's USDC market was **eighteen hundredths of a point** from the knee. The signal endpoint alone shows a healthy 3.29% supply APY and says nothing about that.
+
+The kink and both slopes are read from each protocol's own interest rate contract — for Compound the reconstructed curve is checked against `getBorrowRate(u)`, the contract's own pure function, and matched it wei-for-wei at 50/85/90/93/99% utilization; for Aave the shape is checked against the ceiling the contract itself reports (`base + slope1 + slope2 == getMaxVariableBorrowRate`). If either check fails the protocol is dropped rather than served with a number derived from a formula that changed.
+
+This is also the first route that speaks to the **borrower** rather than the lender.
+
+**Aave and Compound only.** Morpho's `AdaptiveCurveIRM` fails on three independent counts, checked live: its curve constants aren't exposed on-chain (`CURVE_STEEPNESS`, `TARGET_UTILIZATION`, `ADJUSTMENT_SPEED` and `INITIAL_RATE_AT_TARGET` are all `internal constant`, so using them would mean hardcoding numbers copied from a repo); what *is* readable, `rateAtTarget(id)`, is **state that drifts over time**, not a static curve, so "the rate at 95%" has no fixed answer there; and this service reads a **vault** (Gauntlet USDC Prime, $429M across 5 Blue markets with different collateral) whose curator reallocates at will. Moonwell, Euler and Fluid come from DefiLlama with no curve access at all. All of them are reported as `measured: false` — never as stable.
 
 ### How long is a signal good for?
 

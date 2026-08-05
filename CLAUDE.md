@@ -103,7 +103,18 @@ Duas famílias de rota pagas novas (preço BASE, não o premium da decisão — 
 
 **Merkl foi avaliada e descartada** (checagem ao vivo em 2026-08-05, documentada em `durability.ts`): a API tem `earliestCampaignEnd`, mas Aave/Compound/Euler/Fluid não têm nenhuma campanha `LEND` na Base, Morpho/Moonwell só aparecem como vaults MetaMorpho que não são os mercados lidos aqui, e `status=PAST` devolve timestamps nulos (sem histórico de renovação). Cobrir 2 de 6 com casamento adivinhado, num universo onde a maioria das campanhas é semanal e renova, geraria alarme falso recorrente. Não reintroduzir sem refazer essa checagem.
 
-`UsageRoute` ganhou `"durability"`/`"capacity"` e `routeFromResourceUrl` mapeia os dois paths — sem isso toda venda dos produtos novos cairia em `"other"` e o funil não saberia dizer qual vendeu.
+### /sensitivity/* — a curva de juros, e por que o client agora usa multicall (2026-08-05)
+
+Terceira rota analítica, e a primeira que fala com o lado TOMADOR. `market-data/rateCurve.ts` normaliza as duas curvas suportadas na MESMA forma (joelho + três âncoras: u=0, u=kink, u=100%), porque ambas são lineares por partes na taxa NATIVA — a interpolação tem que ser feita ali e só depois convertida pra APY, nunca o contrário (a conversão é composta e não-linear).
+
+Cada leitura vem com uma prova viva anexada, e é isso que separa esta rota de um chute com cara de precisão:
+- **Compound** (`onchain-rate-function`): a curva reconstruída é conferida a cada leitura contra `getBorrowRate(u)`, função PURA do Comet. Bateu wei a wei em 50/85/90/93/99% na validação de 2026-08-05. Divergiu? Omite.
+- **Aave** (`onchain-curve-params`): não há função pura pra comparar, mas o contrato reporta o TETO, que por definição é `base + slope1 + slope2`. Identidade não fecha = forma da curva mudou = omite. O endereço da estratégia é lido POR CHAMADA via `getReserveData`, nunca fixado em config — a governança troca a estratégia de uma reserva sem avisar, e um endereço chumbado serviria a curva antiga com toda a cara de estar certa.
+- **Morpho fica de fora** por três motivos independentes, todos checados ao vivo: o `AdaptiveCurveIRM` não expõe as constantes da curva (são `internal constant`); `rateAtTarget(id)` é ESTADO que escorrega com o tempo, não curva estática; e `morpho.ts` lê um VAULT que mistura 5 mercados Blue e cujo curador realoca. Não reintroduzir sem refazer essa checagem.
+
+**`market-data/client.ts` ganhou `batch: { multicall: true }` por causa desta rota, e o motivo é medido:** a sensibilidade dispara ~6 leituras por asset (1 `getReserveData` + 5 getters da estratégia, mais 4 parâmetros + 1 sonda no Comet). Sem agrupar, o RPC público devolvia `over rate limit` em TODOS os protocolos e a resposta saía com cobertura 0 de 5 — a degradação graciosa funcionava e entregava um relatório vazio. O TTL do cache da curva é 300s (não 30s como os leitores de taxa) de propósito: o que se guarda são parâmetros que só mudam por governança, enquanto a utilização continua vindo fresca das leituras de taxa.
+
+`UsageRoute` ganhou `"durability"`/`"capacity"`/`"sensitivity"` e `routeFromResourceUrl` mapeia os três paths — sem isso toda venda dos produtos novos cairia em `"other"` e o funil não saberia dizer qual vendeu.
 
 ### Identidade ERC-8004 (attestation/erc8004.ts, agentCard.ts, cli/registerAgent.ts)
 

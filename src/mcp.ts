@@ -16,6 +16,8 @@ import { parseDecisionQuery } from "./signal/parseDecisionQuery.js";
 import { ASSET_IDS, LENDING_ASSET_IDS } from "./market-data/types.js";
 import { computeDurability } from "./signal/durability.js";
 import { computeCapacity } from "./signal/capacity.js";
+import { computeSensitivity } from "./signal/sensitivity.js";
+import { collectBorrowRateCurves } from "./market-data/rateCurve.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
 import { recordUsage } from "./usage/usageStore.js";
@@ -47,6 +49,9 @@ const DURABILITY_INPUT_SHAPE = {
     .optional()
     .describe("Which Base lending market to stress-test: USDC or WETH. Defaults to USDC."),
 };
+
+const SENSITIVITY_TOOL_DESCRIPTION =
+  "How close a Base lending market is to the kink where borrow rates explode. Returns, per protocol, the current utilization, the kink read from the protocol's own interest rate curve, the headroom in bps, and the borrow APY at points around the kink — plus how many times the borrow cost multiplies just past it. Measured on a live reading: Compound USDC sat 0.17 points below its kink, where borrow cost goes from ~4% to ~16%. Aave and Compound only: Morpho's adaptive IRM has no static curve to read and DefiLlama-sourced protocols expose none, so they are marked unmeasured and never assumed stable. Describes the current state of the curve, not a prediction that utilization will move.";
 
 const CAPACITY_INPUT_SHAPE = {
   // Enum restrito a LENDING_ASSET_IDS de propósito: pedir capacidade de
@@ -252,15 +257,17 @@ export async function createMcpRequestHandler(
      */
     async function derivedToolResult<T>(
       asset: (typeof ASSET_IDS)[number],
-      route: "durability" | "capacity",
-      derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T,
+      route: "durability" | "capacity" | "sensitivity",
+      // Assíncrona porque a sensibilidade lê a curva de juros on-chain além das
+      // taxas; as outras duas continuam derivando de forma síncrona.
+      derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T | Promise<T>,
     ) {
       try {
         const readings = await collectRates(asset);
         const signal = computeSignal(readings);
         const rawSignal = JSON.stringify(signal);
         const signed = await signPayload(signer, rawSignal, signal);
-        const content = [{ type: "text" as const, text: JSON.stringify(derive(readings)) }];
+        const content = [{ type: "text" as const, text: JSON.stringify(await derive(readings)) }];
         if (signed) {
           content.push({
             type: "text" as const,
@@ -311,6 +318,26 @@ export async function createMcpRequestHandler(
         const amount = typeof amountUsd === "number" && Number.isFinite(amountUsd) && amountUsd > 0 ? amountUsd : null;
         return derivedToolResult(asset, "capacity", (readings) => computeCapacity(asset, readings, amount));
       }),
+    );
+
+    mcpServer.tool(
+      "get_rate_sensitivity",
+      SENSITIVITY_TOOL_DESCRIPTION,
+      // Mesmo enum restrito das outras duas analíticas: só mercado de empréstimo
+      // tem curva de utilização.
+      DURABILITY_INPUT_SHAPE,
+      paidSignal(async ({ asset = "USDC" }) =>
+        derivedToolResult(asset, "sensitivity", async (readings) =>
+          computeSensitivity(
+            asset,
+            readings,
+            await collectBorrowRateCurves(
+              asset,
+              readings.map((r) => r.protocol),
+            ),
+          ),
+        ),
+      ),
     );
 
     return mcpServer;

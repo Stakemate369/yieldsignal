@@ -6,7 +6,7 @@
   "description": "Agente vendedor de sinal de yield via x402: ETH liquid staking (Ethereum) + lending USDC/WETH na Base (Aave/Compound/Morpho/Moonwell/Euler/Fluid), com sinal e decisao MOVE/HOLD assinados e track record on-chain",
   "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm ci --prefix client && npm run build --prefix client && tsc -p tsconfig.json",
     "dev": "tsx src/server.ts",
     "signal": "tsx src/cli/showSignal.ts",
     "withdraw": "tsx src/cli/withdraw.ts",

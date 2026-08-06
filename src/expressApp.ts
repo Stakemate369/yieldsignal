@@ -862,8 +862,15 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     try {
       const readings = await collectRates(asset);
       const signal = computeSignal(readings);
-      const body = { ...(await derive(readings)), signal };
       const rawSignal = JSON.stringify(signal);
+      // `signedSignalText` carrega o texto EXATO que foi assinado. Sem ele o
+      // verificador teria que re-serializar `body.signal` pra conferir o
+      // contentHash — e re-serializar arrisca bytes diferentes dos assinados
+      // (ordem de chave, espaçamento), que é a fragilidade que o canal MCP já
+      // evita devolvendo o texto verbatim. Sem isto, um cliente que RECUSA
+      // resposta não verificada (como o plugin elizaOS) não conseguiria aceitar
+      // nenhuma resposta analítica.
+      const body = { ...(await derive(readings)), signal, signedSignalText: rawSignal };
       const signed = await signPayload(signer, rawSignal, signal);
       if (signed) {
         res.setHeader("X-Signal-Signature", signed.signature);

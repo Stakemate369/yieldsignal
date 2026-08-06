@@ -128,7 +128,12 @@ async function main(): Promise<void> {
   console.log(`\nSchema registrado com sucesso.`);
   console.log(`UID: ${uid}`);
   console.log(`Verificar: https://base.easscan.org/schema/view/${uid}`);
-  console.log(`\nAdicione ao .env (e nas env vars da Vercel): EAS_SCHEMA_UID=${uid}`);
+  // BUG REAL, achado em 2026-08-06 registrando o v2: esta linha tinha
+  // `EAS_SCHEMA_UID` fixo, independente do schema que acabara de ser registrado.
+  // Seguir a instrução ao pé da letra sobrescreveria o UID do v1 com o do v2 e
+  // quebraria a leitura de TODO o histórico antigo — que é justamente o ativo
+  // que o serviço leva calendário pra construir. Agora usa o alvo real.
+  console.log(`\nAdicione ao .env (e nas env vars da Vercel): ${target.envVar}=${uid}`);
 }
 
 main().catch((err) => {

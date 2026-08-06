@@ -98,6 +98,64 @@ export function decodeSignalAttestation(raw: RawAttestation): DecodedSignalAttes
  * (expressApp.ts, GET /track-record) — nenhum banco novo precisa existir só
  * pra isso, o histórico já é público e permanente no próprio EAS.
  */
+/**
+ * Último registro de sensibilidade POR MERCADO (`asset|protocol`).
+ *
+ * Existe pra o gatilho ter teto de custo: estar perto do joelho diz que o
+ * mercado é interessante, não que houve informação nova. Sem saber o que já foi
+ * gravado, o cron publicaria a cada rodada — mesma disciplina que
+ * `decideAutoAttest` já dá ao sinal.
+ *
+ * Decodifica só os dois campos que a decisão usa (utilização e hora); o resto
+ * do registro continua no EAS pra quem for pontuar depois.
+ */
+export async function fetchLastSensitivityByMarket(params: {
+  schemaId: `0x${string}`;
+  attester: `0x${string}`;
+  take?: number;
+}): Promise<Map<string, { utilizationBps: number; time: number }>> {
+  const { schemaId, attester, take = 100 } = params;
+  const query = `query($where: AttestationWhereInput, $take: Int) {
+    attestations(where: $where, take: $take, orderBy: { time: desc }) {
+      time
+      decodedDataJson
+    }
+  }`;
+  const res = await fetch(EASSCAN_GRAPHQL_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      variables: { where: { schemaId: { equals: schemaId }, attester: { equals: attester } }, take },
+    }),
+  });
+  if (!res.ok) throw new Error(`EASScan GraphQL respondeu ${res.status}`);
+  const json = (await res.json()) as { data?: { attestations: RawAttestation[] }; errors?: unknown };
+  if (json.errors || !json.data) throw new Error(`EASScan GraphQL erro: ${JSON.stringify(json.errors)}`);
+
+  // A query já vem ordenada por tempo desc, então o PRIMEIRO de cada mercado é
+  // o mais recente — `has` antes de gravar preserva isso.
+  const porMercado = new Map<string, { utilizationBps: number; time: number }>();
+  for (const raw of json.data.attestations) {
+    try {
+      const campos = JSON.parse(raw.decodedDataJson) as { name: string; value: { value: unknown } }[];
+      const get = (nome: string) => campos.find((c) => c.name === nome)?.value?.value;
+      const asset = String(get("asset") ?? "");
+      const protocol = String(get("protocol") ?? "");
+      const bruto = get("utilizationBps") as { hex?: string } | number | string | undefined;
+      const utilizationBps =
+        typeof bruto === "object" && bruto?.hex ? parseInt(bruto.hex, 16) : Number(bruto);
+      if (!asset || !protocol || !Number.isFinite(utilizationBps)) continue;
+      const chave = `${asset}|${protocol}`;
+      if (!porMercado.has(chave)) porMercado.set(chave, { utilizationBps, time: raw.time });
+    } catch {
+      // Registro ilegível não pode derrubar a decisão dos outros mercados —
+      // na dúvida o gatilho grava, que é o lado seguro pra errar.
+    }
+  }
+  return porMercado;
+}
+
 export async function fetchSignalAttestations(params: {
   schemaId: `0x${string}`;
   /**

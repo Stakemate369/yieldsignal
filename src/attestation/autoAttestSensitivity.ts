@@ -1,7 +1,8 @@
 import { collectRates } from "../signal/collectRates.js";
 import { collectBorrowRateCurves } from "../market-data/rateCurve.js";
 import { computeSensitivity } from "../signal/sensitivity.js";
-import { buildSensitivityAttestCalldata, entriesWorthAttesting } from "./encodeSensitivityAttestation.js";
+import { buildSensitivityAttestCalldata, entriesWorthAttesting, shouldAttestEntry } from "./encodeSensitivityAttestation.js";
+import { fetchLastSensitivityByMarket } from "./queryAttestations.js";
 import { sendAttestation, InsufficientGasError } from "./publishAttestation.js";
 import { logger } from "../notify/logger.js";
 import type { SignerAccount } from "../wallet/signerAccount.js";
@@ -41,7 +42,24 @@ export async function runSensitivityAttestForAsset(
       readings.map((r) => r.protocol),
     );
     const report = computeSensitivity(asset, readings, curves);
-    const candidatos = entriesWorthAttesting(report);
+    const perto = entriesWorthAttesting(report);
+
+    // Segunda peneira: perto do joelho diz que o mercado é interessante, não que
+    // houve informação nova. Sem ela o cron horário gravaria ~72 registros por
+    // dia quase idênticos — teto de custo, não otimização. Falha na consulta
+    // NÃO bloqueia: sem saber o que já existe, grava (erra pro lado de ter
+    // registro a mais, nunca pro de perder série que não dá pra retroagir).
+    const ultimos = await fetchLastSensitivityByMarket({
+      schemaId: opts.schemaUid,
+      attester: opts.signer.address as `0x${string}`,
+    }).catch((err) => {
+      logger.warn({ asset, err }, "falha lendo registros anteriores de sensibilidade — gravando mesmo assim");
+      return new Map<string, { utilizationBps: number; time: number }>();
+    });
+
+    const candidatos = perto.filter(
+      (e) => shouldAttestEntry(e, ultimos.get(`${asset}|${String(e.protocol)}`)).attest,
+    );
 
     // Reserva em wei a partir do ETH configurado — mesma conversão que
     // publishAttestation espera. Feita uma vez, fora do laço.

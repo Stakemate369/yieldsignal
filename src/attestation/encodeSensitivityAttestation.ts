@@ -69,6 +69,38 @@ export function buildSensitivityAttestCalldata(
  */
 export const ATTEST_HEADROOM_THRESHOLD_BPS = 500;
 
+/**
+ * Quanto a utilização precisa ter andado desde o último registro pra valer uma
+ * transação nova. 25bps é o mesmo limiar que o gatilho do sinal usa pro gap —
+ * abaixo disso o mercado praticamente não se mexeu e o registro seria uma cópia
+ * paga do anterior.
+ */
+export const ATTEST_UTILIZATION_DELTA_BPS = 25;
+
+/**
+ * Passou disso, registra mesmo com o mercado parado — é o batimento que garante
+ * série contínua em vez de só picos.
+ *
+ * 24h, não as 12h do sinal, e a diferença é orçamento medido, não estilo. Com
+ * custo de US$ 0,0043 por atestação e ~3 mercados tipicamente dentro da faixa:
+ * 12h dá ~US$ 0,77/mês, 24h dá ~US$ 0,39/mês. O serviço ainda não gera receita,
+ * então o saldo em carteira (0,0021 ETH) é o orçamento real — e ele cobre 154
+ * dias a 12h contra 308 dias a 24h. Amostra diária é densa o bastante pra a
+ * pergunta que este registro existe pra responder ("mercado perto do joelho
+ * cruzou em quanto tempo?"), e o gatilho de 25bps continua capturando qualquer
+ * movimento relevante entre os batimentos.
+ *
+ * Sem nenhum mercado dentro da faixa de 5pp, o custo é ZERO — nada é gravado.
+ */
+export const ATTEST_MAX_STALENESS_MS = 24 * 60 * 60 * 1_000;
+
+/** O que já foi gravado pra um mercado, o mínimo pra decidir se vale gravar de novo. */
+export interface LastSensitivityRecord {
+  utilizationBps: number;
+  /** Segundos desde a época, como o EAS devolve. */
+  time: number;
+}
+
 export function entriesWorthAttesting(report: SensitivityReport): SensitivityEntry[] {
   return report.entries.filter(
     (e) =>
@@ -77,4 +109,33 @@ export function entriesWorthAttesting(report: SensitivityReport): SensitivityEnt
       // Dentro de 5 pontos percentuais do joelho, dos dois lados.
       e.headroomBps <= ATTEST_HEADROOM_THRESHOLD_BPS,
   );
+}
+
+/**
+ * Vale gravar ESTE mercado agora? Pura, testável sem RPC.
+ *
+ * Estar perto do joelho diz que o mercado é INTERESSANTE; não diz que houve
+ * informação nova. Sem esta segunda peneira o gatilho publicaria a cada rodada
+ * do cron — com 3 mercados qualificando e cron horário, ~72 transações por dia
+ * gravando registros quase idênticos. O gatilho do sinal já tinha essa
+ * disciplina (`decideAutoAttest`); o de sensibilidade nasceu sem, e isso é um
+ * teto de custo faltando, não uma otimização.
+ */
+export function shouldAttestEntry(
+  entry: SensitivityEntry,
+  last: LastSensitivityRecord | undefined,
+  now: Date = new Date(),
+): { attest: boolean; reason: string } {
+  if (entry.utilizationBps === null) return { attest: false, reason: "entrada não medida" };
+  if (!last) return { attest: true, reason: "nenhum registro anterior para este mercado" };
+
+  const delta = Math.abs(entry.utilizationBps - last.utilizationBps);
+  if (delta >= ATTEST_UTILIZATION_DELTA_BPS) {
+    return { attest: true, reason: `utilização andou ${delta} bps (limiar ${ATTEST_UTILIZATION_DELTA_BPS})` };
+  }
+  const ageMs = now.getTime() - last.time * 1_000;
+  if (ageMs >= ATTEST_MAX_STALENESS_MS) {
+    return { attest: true, reason: `último registro tem ${Math.round(ageMs / 3_600_000)}h` };
+  }
+  return { attest: false, reason: `utilização andou só ${delta} bps e o registro é recente` };
 }

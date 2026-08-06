@@ -47,6 +47,7 @@ import { readDeployDrift } from "./notify/deployDrift.js";
 import { buildTrackRecord } from "./attestation/trackRecord.js";
 import { TRACK_RECORD_PAGE_HTML } from "./trackRecordPage.js";
 import { AGENT_CARD_JSON } from "./agentCard.js";
+import { buildOpenApi, buildWellKnownX402, type DiscoveryRoute } from "./discoveryDocument.js";
 
 // Um path por ativo vendido — cada um é uma rota x402 protegida separada,
 // mesmo preço/descrição-base, preço e descrição próprios só pra deixar claro
@@ -688,6 +689,64 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // Registration file ERC-8004 (ver attestation/erc8004.ts) — estático até o
   // registro on-chain acontecer (npm run register-agent), quando o agentId
   // real é adicionado ao array `registrations` (ver comentário em agentCard.ts).
+  /**
+   * Lista de rotas pagas para os documentos de descoberta, montada das MESMAS
+   * tabelas que registram as rotas de verdade. Uma lista escrita à mão aqui
+   * divergiria no primeiro produto novo e passaria a anunciar rota inexistente
+   * — pior que não ter documento. Os parâmetros repetem o que já foi declarado
+   * ao Bazaar, pelo mesmo motivo: duas descrições da mesma coisa divergem.
+   */
+  function discoveryRoutes(): DiscoveryRoute[] {
+    const p = (name: string, required: boolean, type: "string" | "number", description: string) => ({ name, required, type, description });
+    const decisionParams = [
+      p("position", false, "string", "Protocol where your capital sits now, or 'idle' if uninvested."),
+      p("amountUsd", false, "number", "Position size in USD. Scales the gain and the break-even."),
+      p("moveCostUsd", false, "number", "Your estimated cost to move (gas + slippage), in USD."),
+      p("horizonDays", false, "number", "Days you expect to hold before re-evaluating."),
+    ];
+    return [
+      ...(Object.keys(RESOURCE_PATHS) as AssetId[]).map((a) => ({
+        path: RESOURCE_PATHS[a], description: FINAL_DESCRIPTIONS.signal[a], priceUsd: env.PRICE_USD, params: [],
+      })),
+      ...(Object.keys(DECISION_PATHS) as AssetId[]).map((a) => ({
+        path: DECISION_PATHS[a], description: FINAL_DESCRIPTIONS.decision[a], priceUsd: env.DECISION_PRICE_USD, params: decisionParams,
+      })),
+      ...(Object.keys(DURABILITY_PATHS) as LendingAssetId[]).map((a) => ({
+        path: DURABILITY_PATHS[a], description: FINAL_DESCRIPTIONS.durability[a], priceUsd: env.PRICE_USD, params: [],
+      })),
+      ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((a) => ({
+        path: CAPACITY_PATHS[a], description: FINAL_DESCRIPTIONS.capacity[a], priceUsd: env.PRICE_USD,
+        params: [p("amountUsd", false, "number", "Position size in USD to test for exit. Omit for utilization and free liquidity without a verdict.")],
+      })),
+      ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((a) => ({
+        path: SENSITIVITY_PATHS[a], description: FINAL_DESCRIPTIONS.sensitivity[a], priceUsd: env.PRICE_USD, params: [],
+      })),
+      ...(Object.keys(EXPOSURE_PATHS) as LendingAssetId[]).map((a) => ({
+        path: EXPOSURE_PATHS[a], description: FINAL_DESCRIPTIONS.exposure[a], priceUsd: env.PRICE_USD,
+        params: [p("positions", true, "string", "REQUIRED. Positions as comma-separated protocol:usd pairs, e.g. aave:200000,morpho:150000. Known protocols: aave, morpho, compound, moonwell, euler, fluid.")],
+      })),
+    ];
+  }
+
+  /** Base URL a partir do pedido, pra o documento servir igual em local e produção. */
+  function baseUrlOf(req: express.Request): string {
+    const proto = (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0] ?? req.protocol;
+    return `${proto}://${req.get("host")}`;
+  }
+
+  // Documentos de DESCOBERTA — grátis e sem autenticação de propósito: um
+  // indexador que precisasse pagar pra saber o que existe nunca listaria nada.
+  // Motivo de existirem: a submissão ao x402scan foi recusada em 2026-08-06 com
+  // "No discovery document found" — responder 402 não basta, o catálogo precisa
+  // da ENUMERAÇÃO das rotas pra saber que são 14 e não 1.
+  app.get("/openapi.json", (req, res) => {
+    res.json(buildOpenApi(baseUrlOf(req), discoveryRoutes(), server.payToEvmAddress!));
+  });
+
+  app.get("/.well-known/x402", (req, res) => {
+    res.json(buildWellKnownX402(baseUrlOf(req), discoveryRoutes(), server.payToEvmAddress!));
+  });
+
   app.get("/agent-card.json", (_req, res) => {
     res.type("application/json").send(AGENT_CARD_JSON);
   });

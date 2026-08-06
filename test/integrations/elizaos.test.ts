@@ -4,9 +4,17 @@ import { yieldSignalPlugin, parseAsset } from "../../integrations/elizaos/yieldS
 describe("yieldSignalPlugin (ElizaOS)", () => {
   it("expõe a action GET_YIELD_SIGNAL com similes e descrição corretos", () => {
     expect(yieldSignalPlugin.name).toBe("yieldsignal");
-    expect(yieldSignalPlugin.actions).toHaveLength(1);
+    // Verifica o CONJUNTO, não a contagem: um número cru quebra a cada produto
+    // novo sem dizer o que mudou, e não pega uma action renomeada por engano.
+    expect((yieldSignalPlugin.actions ?? []).map((a) => a.name).sort()).toEqual([
+      "GET_EXIT_CAPACITY",
+      "GET_RATE_SENSITIVITY",
+      "GET_SHARED_EXPOSURE",
+      "GET_YIELD_DURABILITY",
+      "GET_YIELD_SIGNAL",
+    ]);
 
-    const action = yieldSignalPlugin.actions![0];
+    const action = yieldSignalPlugin.actions!.find((a) => a.name === "GET_YIELD_SIGNAL")!;
     expect(action.name).toBe("GET_YIELD_SIGNAL");
     expect(action.similes).toContain("BEST_LENDING_RATE");
     expect(action.similes).toContain("ETH_STAKING_APY");
@@ -32,12 +40,12 @@ describe("yieldSignalPlugin (ElizaOS)", () => {
   });
 
   it("validate sempre resolve true — não depende de wallet configurada pra ser oferecida como ação", async () => {
-    const action = yieldSignalPlugin.actions![0];
+    const action = yieldSignalPlugin.actions!.find((a) => a.name === "GET_YIELD_SIGNAL")!;
     await expect(action.validate({} as never, {} as never)).resolves.toBe(true);
   });
 
   it("handler retorna ActionResult com success:false (não boolean) quando a chamada paga falha", async () => {
-    const action = yieldSignalPlugin.actions![0];
+    const action = yieldSignalPlugin.actions!.find((a) => a.name === "GET_YIELD_SIGNAL")!;
     const message = { content: { text: "what's the best USDC rate?" } } as never;
 
     const result = await action.handler({} as never, message, undefined, undefined, undefined);

@@ -69,6 +69,83 @@ export interface VerifiedYieldSignal {
 const DEFAULT_BASE_URL = "https://yieldsignal.vercel.app";
 
 /**
+ * Os quatro produtos analíticos só existem pra mercado de EMPRÉSTIMO. Staking
+ * líquido não tem utilização, não tem curva de juros e a DefiLlama não itemiza
+ * incentivo pros cinco protocolos — as rotas nem existem pra ele, então o tipo
+ * recusa em tempo de compilação em vez de deixar o agente pagar por um 404.
+ */
+export const LENDING_ASSETS = ["USDC", "WETH"] as const;
+export type LendingAsset = (typeof LENDING_ASSETS)[number];
+
+export interface DecisionInput {
+  position?: string;
+  amountUsd?: number;
+  moveCostUsd?: number;
+  horizonDays?: number;
+}
+
+/**
+ * Os relatórios são declarados pelos campos-manchete, não campo a campo: o
+ * corpo real traz mais (cada entrada por protocolo, a curva, os `basis`), e
+ * duplicar as interfaces inteiras aqui criaria duas fontes de verdade que
+ * saem de sincronia no primeiro campo novo. `signal` vem embutido em todos —
+ * é o objeto EIP-712 assinado, o mesmo de `getSignal`.
+ */
+export interface DecisionReport {
+  action: string;
+  signal: YieldSignal;
+  [field: string]: unknown;
+}
+
+export interface DurabilityReport {
+  asset: string;
+  basis: "incentive-stress-test";
+  bestProtocolNow: string | null;
+  bestProtocolPostIncentive: string | null;
+  /** `null` quando o líder atual não é decomponível — nunca `false` por omissão. */
+  rankingChangesWithoutIncentives: boolean | null;
+  bestVerifiableFloor: { protocol: string; apyBps: number } | null;
+  coverage: { decomposable: number; total: number };
+  signal: YieldSignal;
+  [field: string]: unknown;
+}
+
+export interface CapacityReport {
+  asset: string;
+  basis: "onchain-protocol-books";
+  bestProtocolNow: string | null;
+  bestProtocolExecutable: string | null;
+  unmeasured: string[];
+  coverage: { measured: number; total: number };
+  signal: YieldSignal;
+  [field: string]: unknown;
+}
+
+export interface SensitivityReport {
+  asset: string;
+  basis: "onchain-interest-rate-curve";
+  tightestToKink: { protocol: string; headroomBps: number } | null;
+  pastKink: string[];
+  unmeasured: string[];
+  coverage: { measured: number; total: number };
+  signal: YieldSignal;
+  [field: string]: unknown;
+}
+
+export interface ExposureReport {
+  asset: string;
+  basis: "declared-positions";
+  totalUsd: number;
+  nominalVenues: number;
+  topFactor: { kind: string; key: string; pctOfAttributed: number; via: string[] } | null;
+  /** Percentuais são sobre o capital ATRIBUÍDO; `coverage` diz quanto entrou na conta. */
+  coverage: { attributedUsd: number; totalUsd: number };
+  unattributed: { protocol: string; usd: number; reason: string }[];
+  signal: YieldSignal;
+  [field: string]: unknown;
+}
+
+/**
  * Verifica um par (corpo bruto, headers de assinatura) contra a resposta
  * servida — duas checagens independentes, ambas precisam passar:
  * 1. `contentHash` embutido no struct EIP-712 bate com `keccak256(raw)` (prova
@@ -131,10 +208,69 @@ export function createYieldSignalClient(client: x402Client | x402HTTPClient, opt
     return { raw, res };
   }
 
+  /**
+   * Chamada paga a qualquer rota do catálogo. Genérica de propósito: os quatro
+   * produtos analíticos têm formatos distintos e cada um declara o próprio
+   * `basis`, então tipar o retorno aqui duplicaria interfaces grandes que já
+   * vivem no servidor e apodreceriam fora de sincronia. O consumidor recebe o
+   * corpo íntegro, que é o mesmo texto assinado.
+   */
+  async function fetchProduct<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+    const qs = params
+      ? Object.entries(params)
+          .filter(([, v]) => v !== undefined && v !== "")
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+          .join("&")
+      : "";
+    const res = await fetchWithPayment(`${baseUrl}${path}${qs ? `?${qs}` : ""}`);
+    if (!res.ok) {
+      throw new Error(`YieldSignal respondeu ${res.status}: ${await res.text()}`);
+    }
+    return JSON.parse(await res.text()) as T;
+  }
+
   return {
     async getSignal(asset: YieldSignalAsset = "USDC"): Promise<YieldSignal> {
       const { raw } = await fetchRaw(asset);
       return JSON.parse(raw) as YieldSignal;
+    },
+
+    /** MOVE/HOLD dado onde seu capital já está, com ganho líquido e break-even. Preço premium. */
+    async getDecision(asset: YieldSignalAsset = "USDC", input: DecisionInput = {}): Promise<DecisionReport> {
+      return fetchProduct<DecisionReport>(`/decision/${RESOURCE_PATHS[asset]}`, { ...input });
+    },
+
+    /** Quanto da APY sobra se o incentivo parar. Só mercado de empréstimo. */
+    async getDurability(asset: LendingAsset = "USDC"): Promise<DurabilityReport> {
+      return fetchProduct<DurabilityReport>(`/durability/${RESOURCE_PATHS[asset]}`);
+    },
+
+    /** Utilização e liquidez sacável; com `amountUsd`, se a sua saída cabe agora. */
+    async getCapacity(asset: LendingAsset = "USDC", amountUsd?: number): Promise<CapacityReport> {
+      return fetchProduct<CapacityReport>(`/capacity/${RESOURCE_PATHS[asset]}`, { amountUsd });
+    },
+
+    /** A que distância o mercado está do joelho onde a taxa de empréstimo dispara. */
+    async getSensitivity(asset: LendingAsset = "USDC"): Promise<SensitivityReport> {
+      return fetchProduct<SensitivityReport>(`/sensitivity/${RESOURCE_PATHS[asset]}`);
+    },
+
+    /**
+     * Quanto da sua carteira está atrás do mesmo risco. `positions` aceita o
+     * mapa `{ aave: 200000 }` ou a string `"aave:200000,morpho:150000"` — o
+     * mapa evita que o chamador monte o formato à mão e erre a separação.
+     */
+    async getExposure(
+      asset: LendingAsset = "USDC",
+      positions: Record<string, number> | string,
+    ): Promise<ExposureReport> {
+      const encoded =
+        typeof positions === "string"
+          ? positions
+          : Object.entries(positions)
+              .map(([protocol, usd]) => `${protocol}:${usd}`)
+              .join(",");
+      return fetchProduct<ExposureReport>(`/exposure/${RESOURCE_PATHS[asset]}`, { positions: encoded });
     },
 
     /** Mesma chamada paga que `getSignal`, mas também verifica a assinatura EIP-712 (X-Signal-* headers) antes de devolver. */

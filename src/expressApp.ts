@@ -40,6 +40,8 @@ import { sendTelegramAlert } from "./notify/telegram.js";
 import { getSignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 import { runAutoAttestForAsset } from "./attestation/autoAttest.js";
+import { readGasRunway } from "./attestation/gasRunway.js";
+import { readDeployDrift } from "./notify/deployDrift.js";
 import { buildTrackRecord } from "./attestation/trackRecord.js";
 import { TRACK_RECORD_PAGE_HTML } from "./trackRecordPage.js";
 import { AGENT_CARD_JSON } from "./agentCard.js";
@@ -118,6 +120,22 @@ export const SENSITIVITY_PATHS: Record<LendingAssetId, string> = {
   WETH: "/sensitivity/weth-base-yield",
 };
 
+/**
+ * Todo caminho PAGO do serviço, numa lista só. Existe pra ser testável: sem
+ * ela, "existe alias sombreando rota paga?" só dá pra responder lendo o arquivo
+ * inteiro — e um alias que colide com um caminho canônico serviria um redirect
+ * onde deveria sair um 402, quebrando o pagamento em silêncio, do lado do
+ * COMPRADOR (o servidor continuaria parecendo saudável).
+ */
+export const PAID_PATHS: readonly string[] = [
+  ...Object.values(RESOURCE_PATHS),
+  ...Object.values(DECISION_PATHS),
+  ...Object.values(DURABILITY_PATHS),
+  ...Object.values(CAPACITY_PATHS),
+  ...Object.values(SENSITIVITY_PATHS),
+  ...Object.values(EXPOSURE_PATHS),
+];
+
 const SENSITIVITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
   USDC: "How close USDC lending on Base is to the kink where borrow rates explode: per-protocol utilization, the kink read from the protocol's own rate curve, headroom in bps, and borrow APY at points around it. Aave and Compound only — Morpho's adaptive IRM has no static curve and DefiLlama-sourced protocols expose none, so they are marked unmeasured, never assumed stable. Describes state, not a forecast.",
   WETH: "How close WETH lending on Base is to the kink where borrow rates explode — same contract as the USDC sensitivity route. Aave and Compound only; protocols without a readable curve are marked unmeasured, never assumed stable. Describes state, not a forecast.",
@@ -177,6 +195,40 @@ const ROUTE_DESCRIPTIONS: Record<AssetId, string> = {
  * `test/routeDescriptionLimit.test.ts` leem daqui, pra que o teste meça o mesmo
  * texto que o comprador recebe em vez de uma cópia que pode divergir.
  */
+export const SHORT_ALIASES: Record<string, string> = {
+  "/signal/usdc": RESOURCE_PATHS.USDC,
+  "/signal/weth": RESOURCE_PATHS.WETH,
+  "/signal/eth-staking": RESOURCE_PATHS.ETH_STAKING,
+  "/decision/usdc": DECISION_PATHS.USDC,
+  "/decision/weth": DECISION_PATHS.WETH,
+  "/decision/eth-staking": DECISION_PATHS.ETH_STAKING,
+  // Sem asset nenhum: resolve pro asset de vitrine (o de melhor histórico
+  // verificado, ver FLAGSHIP_ASSET). Um agente que chuta a raiz do recurso
+  // recebia 404; agora cai no produto mais defensável do catálogo.
+  "/signal": RESOURCE_PATHS[FLAGSHIP_ASSET],
+  "/decision": DECISION_PATHS[FLAGSHIP_ASSET],
+  "/durability/usdc": DURABILITY_PATHS.USDC,
+  "/durability/weth": DURABILITY_PATHS.WETH,
+  // Como `/capacity` abaixo: resolve pra USDC e NÃO pro FLAGSHIP_ASSET,
+  // porque ETH_STAKING não tem rota de durabilidade (ver DURABILITY_PATHS).
+  "/durability": DURABILITY_PATHS.USDC,
+  "/capacity/usdc": CAPACITY_PATHS.USDC,
+  "/capacity/weth": CAPACITY_PATHS.WETH,
+  // `/capacity` sem asset resolve pra USDC, NÃO pro FLAGSHIP_ASSET como as
+  // outras famílias: o asset de vitrine é ETH_STAKING, que de propósito não
+  // tem rota de capacidade (staking não é mercado de empréstimo). Apontar pro
+  // flagship aqui geraria um 404 justamente no chute mais provável.
+  "/capacity": CAPACITY_PATHS.USDC,
+  "/sensitivity/usdc": SENSITIVITY_PATHS.USDC,
+  "/sensitivity/weth": SENSITIVITY_PATHS.WETH,
+  // Mesmo motivo de /capacity e /durability: resolve pra USDC, não pro
+  // FLAGSHIP_ASSET, porque staking não tem rota de sensibilidade.
+  "/sensitivity": SENSITIVITY_PATHS.USDC,
+  "/exposure/usdc": EXPOSURE_PATHS.USDC,
+  "/exposure/weth": EXPOSURE_PATHS.WETH,
+  "/exposure": EXPOSURE_PATHS.USDC,
+};
+
 export const FINAL_DESCRIPTIONS: {
   signal: Record<AssetId, string>;
   decision: Record<AssetId, string>;
@@ -417,6 +469,31 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     const problems: string[] = failures.map((f) => `• auto-attest ${f.asset}: ${f.error}`);
     if (!storeHealth.ok) {
       problems.push(`• store de uso (${storeHealth.backend ?? "sem backend"}): ${storeHealth.error ?? "indisponível"}`);
+    }
+
+    // Folga de gas ANTES de bloquear. O aviso que já existia vinha embutido no
+    // erro de cada asset — ou seja, só chegava DEPOIS de a atestação ter sido
+    // pulada. Em 2026-08-05 isso custou 11 horas de buraco no histórico por
+    // faltar um centavo, e histórico on-chain não se preenche depois.
+    // `blocked` já aparece nas falhas acima; aqui o que interessa é o `low`.
+    try {
+      const runway = await readGasRunway(signer.address, env.MIN_GAS_RESERVE_ETH);
+      if (runway.status === "low" && runway.message) {
+        problems.push(`• ${runway.message}`);
+      }
+    } catch (err) {
+      // Nunca deixa a sonda de gas derrubar a checagem — o alerta das falhas de
+      // atestação, que é o sinal principal, tem que sair de qualquer jeito.
+      logger.warn({ err }, "falha lendo folga de gas — checagem diária segue sem esse item");
+    }
+
+    // "O código no ar é o mais recente?" — em 2026-08-05 seis dias de commits
+    // ficaram sem publicar sem ninguém notar, e em 2026-08-06 dois deploys
+    // seguidos foram cancelados por falta de runner. Nos dois casos nada falha
+    // visivelmente: o serviço segue respondendo com código antigo.
+    const drift = await readDeployDrift();
+    if (drift.status === "stale" && drift.message) {
+      problems.push(`• ${drift.message}`);
     }
     if (problems.length > 0) {
       void sendTelegramAlert(
@@ -941,39 +1018,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // pra rota canônica, onde o desafio x402 dispara normalmente e o pagamento
   // liquida contra o path certo. São paths distintos dos canônicos, então não
   // há shadow do middleware de pagamento registrado acima.
-  const SHORT_ALIASES: Record<string, string> = {
-    "/signal/usdc": RESOURCE_PATHS.USDC,
-    "/signal/weth": RESOURCE_PATHS.WETH,
-    "/signal/eth-staking": RESOURCE_PATHS.ETH_STAKING,
-    "/decision/usdc": DECISION_PATHS.USDC,
-    "/decision/weth": DECISION_PATHS.WETH,
-    "/decision/eth-staking": DECISION_PATHS.ETH_STAKING,
-    // Sem asset nenhum: resolve pro asset de vitrine (o de melhor histórico
-    // verificado, ver FLAGSHIP_ASSET). Um agente que chuta a raiz do recurso
-    // recebia 404; agora cai no produto mais defensável do catálogo.
-    "/signal": RESOURCE_PATHS[FLAGSHIP_ASSET],
-    "/decision": DECISION_PATHS[FLAGSHIP_ASSET],
-    "/durability/usdc": DURABILITY_PATHS.USDC,
-    "/durability/weth": DURABILITY_PATHS.WETH,
-    // Como `/capacity` abaixo: resolve pra USDC e NÃO pro FLAGSHIP_ASSET,
-    // porque ETH_STAKING não tem rota de durabilidade (ver DURABILITY_PATHS).
-    "/durability": DURABILITY_PATHS.USDC,
-    "/capacity/usdc": CAPACITY_PATHS.USDC,
-    "/capacity/weth": CAPACITY_PATHS.WETH,
-    // `/capacity` sem asset resolve pra USDC, NÃO pro FLAGSHIP_ASSET como as
-    // outras famílias: o asset de vitrine é ETH_STAKING, que de propósito não
-    // tem rota de capacidade (staking não é mercado de empréstimo). Apontar pro
-    // flagship aqui geraria um 404 justamente no chute mais provável.
-    "/capacity": CAPACITY_PATHS.USDC,
-    "/sensitivity/usdc": SENSITIVITY_PATHS.USDC,
-    "/sensitivity/weth": SENSITIVITY_PATHS.WETH,
-    // Mesmo motivo de /capacity e /durability: resolve pra USDC, não pro
-    // FLAGSHIP_ASSET, porque staking não tem rota de sensibilidade.
-    "/sensitivity": SENSITIVITY_PATHS.USDC,
-    "/exposure/usdc": EXPOSURE_PATHS.USDC,
-    "/exposure/weth": EXPOSURE_PATHS.WETH,
-    "/exposure": EXPOSURE_PATHS.USDC,
-  };
+  // Tabela em escopo de módulo (exportada) — ver PAID_PATHS/SHORT_ALIASES no topo.
   for (const [alias, canonical] of Object.entries(SHORT_ALIASES)) {
     app.get(alias, (req, res) => {
       const qIndex = req.originalUrl.indexOf("?");

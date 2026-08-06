@@ -1,6 +1,6 @@
 {
   "name": "yieldsignal-client",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Thin x402 client for YieldSignal — risk-weighted USDC/WETH lending APY on Base plus ETH liquid staking APY on Ethereum mainnet.",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,12 +12,21 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["x402", "yield", "defi", "base", "agent", "mcp"],
+  "keywords": [
+    "x402",
+    "yield",
+    "defi",
+    "base",
+    "agent",
+    "mcp"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",

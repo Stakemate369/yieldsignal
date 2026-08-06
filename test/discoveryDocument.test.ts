@@ -78,6 +78,13 @@ describe("buildOpenApi", () => {
     expect(r["200"]).toBeDefined();
   });
 
+  // Sem contato, o x402scan lista o serviço como NÃO verificado.
+  it("declara contato, que é o que verifica posse do domínio", () => {
+    const doc = buildOpenApi(BASE, routes, PAY_TO) as any;
+    expect(doc.info.contact.email).toMatch(/^[^@\s]+@[^@\s]+\.[^@\s]+$/);
+    expect(doc.info.contact.url).toContain("github.com");
+  });
+
   it("carrega os metadados de pagamento x402", () => {
     const doc = buildOpenApi(BASE, routes, PAY_TO) as any;
     expect(doc["x-x402"].payTo).toBe(PAY_TO);

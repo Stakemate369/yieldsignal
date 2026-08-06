@@ -48,6 +48,7 @@ import { buildTrackRecord } from "./attestation/trackRecord.js";
 import { TRACK_RECORD_PAGE_HTML } from "./trackRecordPage.js";
 import { AGENT_CARD_JSON } from "./agentCard.js";
 import { buildOpenApi, buildWellKnownX402, type DiscoveryRoute } from "./discoveryDocument.js";
+import { FAVICON_ICO } from "./favicon.js";
 
 // Um path por ativo vendido — cada um é uma rota x402 protegida separada,
 // mesmo preço/descrição-base, preço e descrição próprios só pra deixar claro
@@ -739,6 +740,12 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // Motivo de existirem: a submissão ao x402scan foi recusada em 2026-08-06 com
   // "No discovery document found" — responder 402 não basta, o catálogo precisa
   // da ENUMERAÇÃO das rotas pra saber que são 14 e não 1.
+  // Cache longo: o ícone não muda, e um indexador que o busque a cada varredura
+  // não deve custar invocação de função toda vez.
+  app.get("/favicon.ico", (_req, res) => {
+    res.type("image/x-icon").set("Cache-Control", "public, max-age=604800, immutable").send(FAVICON_ICO);
+  });
+
   app.get("/openapi.json", (req, res) => {
     res.json(buildOpenApi(baseUrlOf(req), discoveryRoutes(), server.payToEvmAddress!));
   });

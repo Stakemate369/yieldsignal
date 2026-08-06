@@ -105,6 +105,15 @@ export function buildOpenApi(baseUrl: string, routes: DiscoveryRoute[], payTo: s
       description:
         "Risk-weighted yield and risk intelligence for autonomous agents, paid per call via x402 — no API key, no signup. Six products: the raw signal (what pays best), the decision (is moving worth the cost), durability (how much of the yield survives if incentives stop), capacity (can you actually withdraw), sensitivity (how close the market is to the kink where borrow rates explode), and exposure (how much of a portfolio sits behind the same risk). Every report names what it could NOT establish rather than filling the gap with a guess.",
       license: { name: "MIT", url: "https://github.com/Stakemate369/yieldsignal/blob/main/LICENSE" },
+      /**
+       * `contact.email` é o que o x402scan usa pra VERIFICAR posse do domínio —
+       * sem ele a listagem entra como não verificada. Também é a única via de
+       * contato de um comprador que não abre issue no GitHub.
+       */
+      contact: {
+        email: "evanoaltar@gmail.com",
+        url: "https://github.com/Stakemate369/yieldsignal/issues",
+      },
     },
     servers: [{ url: baseUrl }],
     externalDocs: { description: "Source and verifiable-trust write-up", url: "https://github.com/Stakemate369/yieldsignal" },

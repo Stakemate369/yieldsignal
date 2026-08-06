@@ -45,7 +45,32 @@ export async function publishAttestation(params: {
     );
   }
 
-  const data = buildAttestCalldata(schemaUid, signal, schemaVersion);
+  return sendAttestation({ data: buildAttestCalldata(schemaUid, signal, schemaVersion), signer, minGasReserveWei });
+}
+
+/**
+ * Envia UMA atestação já codificada. Extraído de `publishAttestation` quando o
+ * schema de sensibilidade entrou: são dois formatos de dado diferentes, mas o
+ * cuidado de envio é idêntico — e duplicar a lógica que decide "posso tentar de
+ * novo?" seria a pior parte possível pra ter em duas cópias, porque o erro dela
+ * é publicar atestação duplicada e permanente.
+ */
+export async function sendAttestation(params: {
+  data: `0x${string}`;
+  signer: SignerAccount;
+  minGasReserveWei?: bigint;
+}): Promise<AttestationResult> {
+  const { data, signer, minGasReserveWei = 0n } = params;
+  const env = loadEnv();
+  const { chain } = withdrawNetworkFor(env.X402_ENVIRONMENT);
+  const publicClient = createPublicClient({ chain, transport: http() });
+  const ethBalance = await publicClient.getBalance({ address: signer.address });
+  if (ethBalance < minGasReserveWei) {
+    throw new InsufficientGasError(
+      `saldo de ETH (${ethBalance} wei) abaixo da reserva mínima configurada (${minGasReserveWei} wei) — ` +
+        `atestação pulada pra não drenar o saldo, mande ETH pra ${signer.address} na Base mainnet.`,
+    );
+  }
 
   // Mesmo cuidado de cli/withdraw.ts: um erro aqui pode ter acontecido DEPOIS
   // do envio já ter sido aceito (RPC lag, timeout da API da CDP) — reenviar

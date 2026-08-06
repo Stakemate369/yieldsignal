@@ -38,6 +38,20 @@ const schema = z.object({
   EAS_SCHEMA_UID_V2: z
     .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{64}$/)])
     .default(""),
+  /**
+   * Schema de SENSIBILIDADE (estado da curva de juros por protocolo — ver
+   * SENSITIVITY_SCHEMA em attestation/schema.ts). Vazio = o gatilho
+   * simplesmente não roda e nada muda; é o mesmo interruptor-por-omissão do v2.
+   *
+   * É o primeiro dos quatro produtos analíticos a entrar no registro público, e
+   * a razão de começar por ele é que só a sensibilidade produz uma série que se
+   * pontua depois: com utilização e joelho gravados a cada leitura, o próprio
+   * histórico responde com o tempo "mercado a meio ponto do joelho cruzou em
+   * quanto tempo?".
+   */
+  EAS_SENSITIVITY_SCHEMA_UID: z
+    .union([z.literal(""), z.string().regex(/^0x[a-fA-F0-9]{64}$/)])
+    .default(""),
   // Protege POST /internal/auto-attest (gasta ETH real de gas quando dispara)
   // — DIFERENTE do padrão usado em checks read-only: aqui vazio significa
   // NEGAR sempre (fail-closed), nunca "endpoint aberto por falta de config",

@@ -2,7 +2,7 @@ import readline from "node:readline/promises";
 import { createPublicClient, decodeEventLog, encodeFunctionData, formatEther, http, zeroAddress } from "viem";
 import { loadEnv } from "../config/env.js";
 import { EAS_BASE_MAINNET, withdrawNetworkFor } from "../config/networks.js";
-import { SCHEMA_REGISTRY_ABI, SIGNAL_SCHEMA, SIGNAL_SCHEMA_V2 } from "../attestation/schema.js";
+import { SCHEMA_REGISTRY_ABI, SIGNAL_SCHEMA, SIGNAL_SCHEMA_V2, SENSITIVITY_SCHEMA } from "../attestation/schema.js";
 import { getSignerAccount } from "../wallet/signerAccount.js";
 import { logger } from "../notify/logger.js";
 
@@ -23,13 +23,22 @@ async function main(): Promise<void> {
   // Qual schema registrar: com o v1 já configurado e o v2 ainda não, o alvo é o
   // v2 — é a migração descrita em attestation/schema.ts (segundo colocado +
   // cobertura da leitura). Com os dois preenchidos, não há nada a fazer.
-  const target = env.EAS_SCHEMA_UID_V2
-    ? null
-    : env.EAS_SCHEMA_UID
+  // Ordem deliberada: primeiro fecha a migração do sinal (v1 -> v2), e só
+  // depois abre o schema de sensibilidade. Registrar os dois na mesma rodada
+  // gastaria gas em duas transações sem que ninguém confirmasse a primeira, e
+  // este comando existe justamente pra ter um humano no loop a cada gasto.
+  const target = !env.EAS_SCHEMA_UID
+    ? { schema: SIGNAL_SCHEMA, envVar: "EAS_SCHEMA_UID" }
+    : !env.EAS_SCHEMA_UID_V2
       ? { schema: SIGNAL_SCHEMA_V2, envVar: "EAS_SCHEMA_UID_V2" }
-      : { schema: SIGNAL_SCHEMA, envVar: "EAS_SCHEMA_UID" };
+      : !env.EAS_SENSITIVITY_SCHEMA_UID
+        ? { schema: SENSITIVITY_SCHEMA, envVar: "EAS_SENSITIVITY_SCHEMA_UID" }
+        : null;
   if (!target) {
-    console.log(`EAS_SCHEMA_UID (${env.EAS_SCHEMA_UID}) e EAS_SCHEMA_UID_V2 (${env.EAS_SCHEMA_UID_V2}) já configurados — nada a fazer.`);
+    console.log(
+      `EAS_SCHEMA_UID (${env.EAS_SCHEMA_UID}), EAS_SCHEMA_UID_V2 (${env.EAS_SCHEMA_UID_V2}) e ` +
+        `EAS_SENSITIVITY_SCHEMA_UID (${env.EAS_SENSITIVITY_SCHEMA_UID}) já configurados — nada a fazer.`,
+    );
     return;
   }
 

@@ -41,6 +41,7 @@ import { getSignerAccount } from "./wallet/signerAccount.js";
 import { signPayload, eip712ForTransport } from "./signal/signResponse.js";
 import { runAutoAttestForAsset } from "./attestation/autoAttest.js";
 import { readGasRunway } from "./attestation/gasRunway.js";
+import { runSensitivityAttestForAsset } from "./attestation/autoAttestSensitivity.js";
 import { readDeployDrift } from "./notify/deployDrift.js";
 import { buildTrackRecord } from "./attestation/trackRecord.js";
 import { TRACK_RECORD_PAGE_HTML } from "./trackRecordPage.js";
@@ -452,6 +453,23 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         }),
       ),
     );
+    // Atestação de SENSIBILIDADE — primeiro dos produtos analíticos a entrar no
+    // registro público. Só roda com EAS_SENSITIVITY_SCHEMA_UID preenchido:
+    // mesmo interruptor-por-omissão do v2 do sinal, então enquanto o schema não
+    // for registrado (transação manual, com CONFIRM) nada aqui acontece e nada
+    // muda. Falha nunca derruba o gatilho do sinal, que é o principal.
+    const sensitivityResults = env.EAS_SENSITIVITY_SCHEMA_UID
+      ? await Promise.all(
+          (Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((asset) =>
+            runSensitivityAttestForAsset(asset, {
+              signer,
+              schemaUid: env.EAS_SENSITIVITY_SCHEMA_UID as `0x${string}`,
+              minGasReserveEth: env.MIN_GAS_RESERVE_ETH,
+            }),
+          ),
+        )
+      : [];
+
     // Vigia da telemetria, de carona no único gatilho diário que já existe
     // (nenhum cron novo). O modo de falha do store é SILENCIOSO por design — a
     // telemetria é best-effort e o produto segue servindo —, então sem esta
@@ -467,6 +485,9 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     // nunca lança (no-op se não configurado).
     const failures = results.filter((r) => r.error);
     const problems: string[] = failures.map((f) => `• auto-attest ${f.asset}: ${f.error}`);
+    for (const s of sensitivityResults.filter((r) => r.error)) {
+      problems.push(`• auto-attest sensibilidade ${s.asset}: ${s.error}`);
+    }
     if (!storeHealth.ok) {
       problems.push(`• store de uso (${storeHealth.backend ?? "sem backend"}): ${storeHealth.error ?? "indisponível"}`);
     }
@@ -500,7 +521,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         `⚠️ YieldSignal — ${problems.length} problema(s) na checagem diária\n\n${problems.join("\n")}`,
       );
     }
-    res.json({ results, usageStore: storeHealth });
+    res.json({ results, sensitivity: sensitivityResults, usageStore: storeHealth });
   });
 
   // Dashboard de track record — fonte da verdade é o próprio EAS (attestation/

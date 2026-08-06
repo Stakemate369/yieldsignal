@@ -130,6 +130,24 @@ Atribuição por topologia, com `basis` dizendo qual você recebeu: Morpho `isol
 
 **`BASE_RPC_URL` (opcional) entrou junto:** as rotas analíticas leem bastante (a cesta da Compound sozinha são ~26 leituras) e o RPC público limita por taxa. Vazio mantém o default da chain. Lido de `process.env` direto em `market-data/client.ts`, NÃO via `loadEnv()`, porque esse módulo roda em teste e em `npm run signal` sem credencial nenhuma — puxar `loadEnv` ali transformaria "escolher RPC" em "precisar de carteira".
 
+### Vigias de operação: folga de gas e publicação parada (2026-08-06)
+
+Dois alertas novos, cada um nascido de um incidente real, e os dois no MESMO gatilho que já existia (nenhum cron novo).
+
+**`attestation/gasRunway.ts`** — em 2026-08-05 o saldo caiu 1 centavo abaixo da reserva, a atestação parou, e o aviso só chegou DEPOIS de já estar bloqueando: 11h de buraco num histórico que não pode ser retroagido. Agora avisa enquanto ainda publica, e mede em ATESTAÇÕES, não em wei — "cabem ~40" diz quanto tempo você tem, "abaixo de X wei" não diz nada. `blocked` e `low` são estados distintos de propósito: um diz que o dano começou, o outro que dá pra agir.
+
+**`notify/deployDrift.ts`** — dois incidentes do mesmo formato, ambos invisíveis: 6 dias de commits que nunca subiram (integração Vercel↔GitHub desconectada) e dois deploys cancelados pelo GitHub por falta de runner, sem executar um passo. Nos dois, produção seguiu respondendo com código antigo. Compara o `VERCEL_GIT_COMMIT_SHA` em execução com o topo de `main` e usa a IDADE do commit como carência — deploy em curso é normal por minutos, commit de 2h que não subiu não é. Sem estado durável. `unknown` NÃO alerta: fora da Vercel não há SHA, e alertar aí faria a checagem gritar em todo ambiente local até virar ruído.
+
+### Atestação dos produtos analíticos — sensibilidade primeiro (2026-08-06)
+
+`SENSITIVITY_SCHEMA` é o primeiro dos quatro analíticos a entrar no registro público. O fosso do serviço é o histórico verificável, e ele cobria SÓ o sinal — os analíticos eram vendidos apoiados numa credibilidade que não ajudavam a construir e não podiam ser pontuados.
+
+**Por que sensibilidade primeiro:** é a única cujo registro vira pergunta EMPÍRICA depois. Gravando utilização e joelho a cada leitura, o histórico responde sozinho "mercado a meio ponto do joelho cruzou em quanto tempo?" — e a folga deixa de ser descritiva. Nenhuma outra rota produz série que se pontue contra o que aconteceu depois.
+
+Um registro POR PROTOCOLO (mercados do mesmo ativo têm joelhos diferentes), sem `headroomBps` (derivável dos dois campos gravados; o v2 do sinal só manteve campo derivável pra não quebrar decodificador antigo, peso que schema novo não tem). `encodeSensitivityData` LANÇA em entrada não medida — gravar "estava a X do joelho" sem curva legível criaria fato falso e permanente. Só atesta quem está a ≤5pp do joelho: atestar tudo não tem teto de custo, e mercado parado longe não gera informação.
+
+`sendAttestation` foi extraído de `publishAttestation` pros dois formatos compartilharem o cuidado de envio — a lógica de "posso tentar de novo?" é a PIOR pra ter duplicada, porque errar nela publica atestação duplicada e permanente. Gated por `EAS_SENSITIVITY_SCHEMA_UID`; vazio = gatilho não roda, mesmo interruptor-por-omissão do v2.
+
 ### Identidade ERC-8004 (attestation/erc8004.ts, agentCard.ts, cli/registerAgent.ts)
 
 [ERC-8004 "Trustless Agents"](https://eips.ethereum.org/EIPS/eip-8004) tem `IdentityRegistry`/`ReputationRegistry` deployados no MESMO endereço (CREATE2 determinístico) em toda chain, Base mainnet incluída — confirmado nesta sessão com `eth_getCode` direto contra `mainnet.base.org` (bytecode real presente, não só o README do repo `erc-8004/erc-8004-contracts` AFIRMANDO isso — mesmo rigor já aplicado ao EAS, ver [[feedback_eas_op_stack_predeploy_abi_mismatch]]). `GET /agent-card.json` serve o registration file no formato exato do spec (`type`/`name`/`description`/`services`/`x402Support`/`active`/`registrations`/`supportedTrust`); `registrations` começa vazio de propósito — só existe `agentId` DEPOIS do mint. `cli/registerAgent.ts` (mesmo padrão `CONFIRM` de `registerSchema.ts`) chama `IdentityRegistry.register(agentURI)` uma vez e imprime a entrada exata pra colar em `src/agentCard.ts`. `ReputationRegistry` é só DOCUMENTADO (endereço no card) — quem chama `giveFeedback` é o COMPRADOR, o contrato bloqueia self-feedback do owner/operador.

@@ -54,6 +54,45 @@ export const SIGNAL_SCHEMA_TYPES_V2 = [
   { name: "protocolsExpected", type: "uint256" },
 ] as const;
 
+/**
+ * Schema de SENSIBILIDADE — o estado da curva de juros de um mercado, datado.
+ *
+ * Existe porque o fosso do serviço é o histórico verificável, e ele cobria só o
+ * sinal: os quatro produtos analíticos eram vendidos apoiados na credibilidade
+ * que o sinal construiu, sem contribuir com nada pra ela e sem poder ser
+ * pontuados. Este é o primeiro a entrar no registro.
+ *
+ * A sensibilidade foi escolhida pra começar por uma razão específica: ela é a
+ * única cujo registro vira uma pergunta EMPÍRICA depois. Guardando utilização e
+ * joelho a cada leitura, o histórico responde sozinho, com o tempo, "mercados
+ * que estavam a menos de meio ponto do joelho cruzaram em quanto tempo?" — e aí
+ * a folga deixa de ser só descritiva. Nenhuma outra rota do catálogo produz uma
+ * série temporal que se pontue contra o que aconteceu depois.
+ *
+ * Um registro POR PROTOCOLO, não por asset: os mercados de um mesmo ativo têm
+ * joelhos e utilizações diferentes (Aave a 86%, Compound a 89,8% no mesmo USDC),
+ * e achatar isso num só número perderia exatamente a diferença que interessa.
+ *
+ * `headroomBps` NÃO entra: é `kinkBps - utilizationBps`, derivável dos dois
+ * campos já gravados. O v2 do sinal manteve um campo derivável só pra não
+ * quebrar decodificador antigo; aqui, sendo schema novo, não há esse peso.
+ *
+ * Registrar exige transação real na mainnet (`npm run register-schema`, com
+ * CONFIRM digitado à mão). Enquanto `EAS_SENSITIVITY_SCHEMA_UID` estiver vazio,
+ * nada muda: o gatilho simplesmente não roda.
+ */
+export const SENSITIVITY_SCHEMA =
+  "string asset,string protocol,uint256 utilizationBps,uint256 kinkBps,uint256 borrowApyBps,uint64 asOf";
+
+export const SENSITIVITY_SCHEMA_TYPES = [
+  { name: "asset", type: "string" },
+  { name: "protocol", type: "string" },
+  { name: "utilizationBps", type: "uint256" },
+  { name: "kinkBps", type: "uint256" },
+  { name: "borrowApyBps", type: "uint256" },
+  { name: "asOf", type: "uint64" },
+] as const;
+
 // Fragmentos mínimos de ABI (só o que este projeto chama) — endereços
 // conferidos em config/networks.ts (EAS_BASE_MAINNET), não repetidos aqui.
 export const SCHEMA_REGISTRY_ABI = [

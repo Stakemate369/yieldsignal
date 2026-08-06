@@ -162,6 +162,16 @@ This measures **structural shared exposure** — the factual claim "these positi
 - `score` — directional: was the flagged protocol still the leader (or within 25bps) **when scored against the market right now**.
 - `windowedScore` — each attestation judged over **its own validity window**, i.e. until the next attestation for that asset replaced it. `medianWindowHours` is the practical answer to "how often should I re-check?" and it differs sharply per market: on the record as of 2026-07-30, **13h for ETH liquid staking and WETH lending, 1h for USDC lending on Base**. USDC rotates fast; that is a property of the market, not a defect the endpoint hides.
 
+### The track record now covers more than the signal
+
+The whole argument of this service is *verifiable, not promised* — and until 2026-08-06 the EAS record covered **only the signal**. The four analytics products were sold leaning on credibility the signal had built, contributed nothing back to it, and could not be scored.
+
+`SENSITIVITY_SCHEMA` is the first to change that, and sensitivity was chosen to go first for a specific reason: it is the only product whose record turns into an **empirical question** later. With utilization and kink stamped on-chain at each reading, the history eventually answers *"markets that sat within half a point of the kink — how often did they cross, and how fast?"* — and the headroom number stops being merely descriptive.
+
+Only **measured** entries can be attested (encoding a non-measured one throws), and only markets **within 5 percentage points of the kink** are written: attesting everything on every read has no cost ceiling, and a market parked at 60% utilization produces no information a month later would not.
+
+Gated by `EAS_SENSITIVITY_SCHEMA_UID`. Empty means the trigger simply does not run — the same switch-by-omission the v2 signal migration used. Registering it costs real gas and requires a typed `CONFIRM` via `npm run register-schema`.
+
 ## Verifiability
 
 > Full write-up with every on-chain artifact, the exact command to verify each one, and an honest list of what the stack does **not** solve: [`docs/verifiable-agent-trust.md`](./docs/verifiable-agent-trust.md).

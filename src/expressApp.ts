@@ -7,6 +7,7 @@ import express from "express";
 // diferente, ajustar aqui é o primeiro lugar a olhar.
 import { createX402Server } from "@coinbase/cdp-sdk/x402";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
+import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { loadEnv } from "./config/env.js";
 import { X402_RECEIVER_ACCOUNT_NAME } from "./config/networks.js";
 import { assertWalletAddress } from "./wallet/walletLock.js";
@@ -230,6 +231,63 @@ export const SHORT_ALIASES: Record<string, string> = {
   "/exposure": EXPOSURE_PATHS.USDC,
 };
 
+/**
+ * Metadados de descoberta do Bazaar para as rotas que RECEBEM parâmetro.
+ *
+ * O SDK da CDP já injeta uma declaração mínima por rota (método + caminho), e é
+ * ela que faz o serviço aparecer no Bazaar assim que o facilitador liquida o
+ * primeiro pagamento — não existe cadastro. O problema é que o mínimo não
+ * descreve query param nenhum: um agente que descobrisse `/exposure/...` no
+ * catálogo não teria como saber que `positions` é OBRIGATÓRIO. Ele chamaria,
+ * PAGARIA, e receberia 400. Estar listado e ser utilizável são coisas
+ * diferentes, e a diferença é este objeto.
+ *
+ * Declarado só onde há parâmetro: as rotas de sinal, durabilidade e
+ * sensibilidade não recebem nada, e a declaração automática já as descreve
+ * inteiramente.
+ */
+function bazaarQuery(input: Record<string, unknown>, properties: Record<string, unknown>, required?: string[]) {
+  // `method` NÃO entra: o pacote o deriva da chave da rota, e o tipo o omite de
+  // propósito pra as duas fontes não poderem divergir. O retorno já vem no
+  // formato `{ bazaar: ... }` que o campo `extensions` da rota espera.
+  return declareDiscoveryExtension({
+    input,
+    inputSchema: { properties, ...(required && required.length > 0 ? { required } : {}) },
+  });
+}
+
+const BAZAAR_DECISION = bazaarQuery(
+  { position: "aave", amountUsd: 25000, horizonDays: 30 },
+  {
+    position: { type: "string", description: "Protocol where your capital sits now, or 'idle' if uninvested." },
+    amountUsd: { type: "number", description: "Position size in USD. Scales the gain and the break-even." },
+    moveCostUsd: { type: "number", description: "Your estimated cost to move (gas + slippage), in USD." },
+    horizonDays: { type: "number", description: "Days you expect to hold before re-evaluating." },
+  },
+);
+
+const BAZAAR_CAPACITY = bazaarQuery(
+  { amountUsd: 200000 },
+  {
+    amountUsd: {
+      type: "number",
+      description: "Position size in USD to test for exit. Omit to get utilization and free liquidity without a verdict.",
+    },
+  },
+);
+
+const BAZAAR_EXPOSURE = bazaarQuery(
+  { positions: "aave:200000,morpho:150000" },
+  {
+    positions: {
+      type: "string",
+      description:
+        "REQUIRED. Your positions as comma-separated protocol:usd pairs. Known protocols: aave, morpho, compound, moonwell, euler, fluid.",
+    },
+  },
+  ["positions"],
+);
+
 export const FINAL_DESCRIPTIONS: {
   signal: Record<AssetId, string>;
   decision: Record<AssetId, string>;
@@ -294,7 +352,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // Mesma fonte de preço usada pela tool MCP get_yield_decision.
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
         `GET ${DECISION_PATHS[asset]}`,
-        { price: env.DECISION_PRICE_USD, description: FINAL_DESCRIPTIONS.decision[asset] },
+        {
+          price: env.DECISION_PRICE_USD,
+          description: FINAL_DESCRIPTIONS.decision[asset],
+          extensions: BAZAAR_DECISION,
+        },
       ]),
       // Durabilidade e capacidade entram no preço BASE (PRICE_USD), não no
       // premium da decisão: são produtos novos, sem track record próprio ainda.
@@ -306,7 +368,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       ]),
       ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${CAPACITY_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.capacity[asset] },
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.capacity[asset], extensions: BAZAAR_CAPACITY },
       ]),
       ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${SENSITIVITY_PATHS[asset]}`,
@@ -314,7 +376,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       ]),
       ...(Object.keys(EXPOSURE_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${EXPOSURE_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.exposure[asset] },
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.exposure[asset], extensions: BAZAAR_EXPOSURE },
       ]),
     ]),
   });

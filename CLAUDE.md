@@ -116,6 +116,20 @@ Cada leitura vem com uma prova viva anexada, e é isso que separa esta rota de u
 
 `UsageRoute` ganhou `"durability"`/`"capacity"`/`"sensitivity"` e `routeFromResourceUrl` mapeia os três paths — sem isso toda venda dos produtos novos cairia em `"other"` e o funil não saberia dizer qual vendeu.
 
+### /exposure/* — fator compartilhado, e a armadilha de contabilidade (2026-08-06)
+
+Quarta rota analítica, e a PRIMEIRA que recebe dado do comprador (`?positions=aave:200000,morpho:150000`) — daí `signal/parsePositions.ts` recusar protocolo desconhecido com 400 em vez de deixar passar: um `aavee` digitado errado viraria "não atribuído" em silêncio e o comprador pagaria por uma análise que ignorou parte da carteira sem avisar.
+
+**A separação `factors` × `parameters` em `ProtocolExposure` não é organização, é correção.** A Aave não tem composição legível (pool compartilhado) mas TEM joelho legível. Se o joelho entrasse na mesma lista de fatores, a posição em Aave contaria como atribuída, entraria no denominador dos percentuais de colateral e faria a concentração parecer menor — escondendo exatamente o que precisava aparecer. Por isso `attributedUsd` conta só quem tem composição, e o joelho sai em `sharedParameters`, contado sobre todas as posições onde foi legível.
+
+Atribuição por topologia, com `basis` dizendo qual você recebeu: Morpho `isolated-market` (exata, mercado isolado com um colateral), Compound `collateral-basket` (pesos reais do que está postado, via `totalsCollateral` × `getPrice` do próprio Comet), Aave **não atribuída** — v3 é pool compartilhado, atribuir a um colateral seria falso e ratear entre todos sugeriria diversificação inexistente.
+
+**Bug real corrigido durante a implementação:** o leitor da Compound tratava falha de RPC e saldo zero como a mesma coisa, e uma leitura falha virava `"no collateral posted"` — motivo plausível e errado, com o protocolo sumindo do relatório em silêncio. Agora falha em QUALQUER perna da cesta recusa a atribuição inteira: com cesta incompleta, os colaterais restantes apareceriam com fatia maior do que têm.
+
+**Detecção de colateral recursivo foi avaliada e descartada** (checagem ao vivo em 2026-08-06): zero ciclos e zero ativos que sejam colateral E emprestado nos 77 mercados vivos do Morpho na Base. E a recursão que matou a Stream Finance não estava no grafo de empréstimo, estava na EMISSÃO do sintético — um detector de ciclo teria dito "tudo limpo" durante o colapso inteiro. Falsa segurança é pior que alarme falso.
+
+**`BASE_RPC_URL` (opcional) entrou junto:** as rotas analíticas leem bastante (a cesta da Compound sozinha são ~26 leituras) e o RPC público limita por taxa. Vazio mantém o default da chain. Lido de `process.env` direto em `market-data/client.ts`, NÃO via `loadEnv()`, porque esse módulo roda em teste e em `npm run signal` sem credencial nenhuma — puxar `loadEnv` ali transformaria "escolher RPC" em "precisar de carteira".
+
 ### Identidade ERC-8004 (attestation/erc8004.ts, agentCard.ts, cli/registerAgent.ts)
 
 [ERC-8004 "Trustless Agents"](https://eips.ethereum.org/EIPS/eip-8004) tem `IdentityRegistry`/`ReputationRegistry` deployados no MESMO endereço (CREATE2 determinístico) em toda chain, Base mainnet incluída — confirmado nesta sessão com `eth_getCode` direto contra `mainnet.base.org` (bytecode real presente, não só o README do repo `erc-8004/erc-8004-contracts` AFIRMANDO isso — mesmo rigor já aplicado ao EAS, ver [[feedback_eas_op_stack_predeploy_abi_mismatch]]). `GET /agent-card.json` serve o registration file no formato exato do spec (`type`/`name`/`description`/`services`/`x402Support`/`active`/`registrations`/`supportedTrust`); `registrations` começa vazio de propósito — só existe `agentId` DEPOIS do mint. `cli/registerAgent.ts` (mesmo padrão `CONFIRM` de `registerSchema.ts`) chama `IdentityRegistry.register(agentURI)` uma vez e imprime a entrada exata pra colar em `src/agentCard.ts`. `ReputationRegistry` é só DOCUMENTADO (endereço no card) — quem chama `giveFeedback` é o COMPRADOR, o contrato bloqueia self-feedback do owner/operador.

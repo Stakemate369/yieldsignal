@@ -44,6 +44,19 @@ const schema = z.object({
   // porque a rota pode gastar fundo real. Configurado no cron-job.org como
   // header `Authorization: Bearer <valor>`.
   CRON_TRIGGER_SECRET: z.string().default(""),
+  /**
+   * RPC da Base a usar em vez do público. Vazio = o default da definição de
+   * chain da viem (`mainnet.base.org`), que é o comportamento histórico.
+   *
+   * Existe porque o RPC público limita por taxa e as rotas analíticas leem
+   * bastante: a de exposição sozinha faz ~26 leituras de contrato pra montar a
+   * cesta de colateral da Compound. Com multicall isso vira poucas chamadas,
+   * mas em serverless cada instância fria refaz o trabalho, e `over rate limit`
+   * degrada em silêncio pra "protocolo não atribuído" — o relatório sai, pago,
+   * com menos cobertura e sem sinal de erro pro comprador. Apontar pra um RPC
+   * dedicado resolve sem tocar em código.
+   */
+  BASE_RPC_URL: z.union([z.literal(""), z.string().url()]).default(""),
   // Piso de saldo de ETH abaixo do qual auto-attest se recusa a gastar mais
   // gas (pra nunca zerar o saldo sozinho) — resto do saque manual continua
   // funcionando normalmente mesmo abaixo desse piso.

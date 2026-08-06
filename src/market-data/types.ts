@@ -57,6 +57,22 @@ export const ASSET_IDS = ["ETH_STAKING", "USDC", "WETH"] as const satisfies read
 export const LENDING_ASSET_IDS = ["USDC", "WETH"] as const satisfies readonly LendingAssetId[];
 
 /**
+ * Protocolos de LENDING vendidos, como lista de runtime. Existe porque a rota
+ * de exposição recebe nome de protocolo VINDO DO COMPRADOR e precisa recusar o
+ * que não conhece: sem esta lista, um `aavee` digitado errado viraria em
+ * silêncio "protocolo não atribuído" e o comprador pagaria por um relatório que
+ * ignora metade da carteira dele sem dizer que ignorou.
+ */
+export const LENDING_PROTOCOL_IDS = [
+  "aave",
+  "morpho",
+  "compound",
+  "moonwell",
+  "euler",
+  "fluid",
+] as const satisfies readonly ProtocolId[];
+
+/**
  * Asset "cabeça de vitrine": o que a página inicial lidera, o que os aliases
  * curtos sem asset (`/signal`, `/decision`) resolvem, e o primeiro da lista de
  * endpoints devolvida num 404.

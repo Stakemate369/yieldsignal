@@ -7,7 +7,7 @@ Risk-weighted yield signals for autonomous agents, paid per call via the [x402](
 - **ETH liquid staking** (Ethereum mainnet) across **Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH**
 - **USDC and WETH lending** (Base) across **Aave, Compound, Morpho, Moonwell, Euler and Fluid**
 
-Five products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), the **capacity** report (can you actually withdraw your size from that market), and the **sensitivity** report (how close the market is to the kink where borrow rates explode).
+Six products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), the **capacity** report (can you actually withdraw your size from that market), the **sensitivity** report (how close the market is to the kink where borrow rates explode), and the **exposure** report (how much of your portfolio sits behind the same risk, no matter how many venues it is spread across).
 
 **Live:** `https://yieldsignal.vercel.app`
 
@@ -21,6 +21,7 @@ GET https://yieldsignal.vercel.app/decision/eth-staking-yield?position=lido&amou
 GET https://yieldsignal.vercel.app/durability/weth-base-yield
 GET https://yieldsignal.vercel.app/capacity/usdc-base-yield?amountUsd=200000
 GET https://yieldsignal.vercel.app/sensitivity/usdc-base-yield
+GET https://yieldsignal.vercel.app/exposure/usdc-base-yield?positions=aave:200000,morpho:150000
 ```
 
 Bare `/signal` and `/decision` (no asset) redirect to the ETH staking route — the asset with the strongest verified track record. Short forms like `/signal/usdc` redirect to the canonical path.
@@ -116,6 +117,43 @@ The kink and both slopes are read from each protocol's own interest rate contrac
 This is also the first route that speaks to the **borrower** rather than the lender.
 
 **Aave and Compound only.** Morpho's `AdaptiveCurveIRM` fails on three independent counts, checked live: its curve constants aren't exposed on-chain (`CURVE_STEEPNESS`, `TARGET_UTILIZATION`, `ADJUSTMENT_SPEED` and `INITIAL_RATE_AT_TARGET` are all `internal constant`, so using them would mean hardcoding numbers copied from a repo); what *is* readable, `rateAtTarget(id)`, is **state that drifts over time**, not a static curve, so "the rate at 95%" has no fixed answer there; and this service reads a **vault** (Gauntlet USDC Prime, $429M across 5 Blue markets with different collateral) whose curator reallocates at will. Moonwell, Euler and Fluid come from DefiLlama with no curve access at all. All of them are reported as `measured: false` — never as stable.
+
+### One risk in three wrappers — `/exposure/*`
+
+```
+GET /exposure/usdc-base-yield?positions=aave:200000,compound:50000,morpho:150000
+```
+
+The market is full of **event detectors** — depeg alerts, hack alerts, liquidation alerts — and most of them are free. None of them answer the question that actually costs money: *am I exposed, and through what path?*
+
+In the Stream Finance collapse, only **1 of ~320 MetaMorpho vaults** held the broken asset directly ($700k of bad debt), yet $93M of loss became **$285M of contagion** because the exposure arrived indirectly. The event was public within hours; what hurt people was not knowing they were two hops from it.
+
+A real reading on 2026-08-06 for the portfolio above:
+
+```
+$400k across 3 venues — $200k attributable
+
+  collateral  cbBTC       81.0%   via compound+morpho   ← shared
+  curator     0x9e33fa…   75.0%   via morpho
+  collateral  WETH        13.4%   via compound+morpho   ← shared
+  parameter   kink=9000  100.0%   via aave+compound     ← shared
+
+  unattributed: aave $200k
+```
+
+Three venues, and 81% of what can be attributed sits behind one collateral. The `kink` line says something else: Aave and Compound both reprice at exactly 90% utilization, so splitting capital between them buys no protection at all against a utilization shock.
+
+**Attribution differs by protocol, because the risk topologies differ**, and the `basis` field says which one you got:
+
+- **Morpho** (`isolated-market`) — each Blue market is isolated with a single collateral, so the attribution is exact.
+- **Compound** (`collateral-basket`) — one base asset against a defined basket, weighted by what is *actually posted* (`totalsCollateral` × the Comet's own price feed). Measured: cbBTC 43.1%, WETH 37.4%, tBTC 7.8%, cbETH 6.9%, wstETH 4.8%.
+- **Aave** — reported **unattributed**, and not for lack of effort: a v3 supplier is exposed to the entire pool's collateral set. Attributing it to one asset would be false, and splitting it across all of them would imply diversification that does not exist.
+
+Percentages are of *attributable* capital, not of the total — over the total they would shrink and read as low concentration when the truth is low visibility. `coverage` reports both.
+
+This measures **structural shared exposure** — the factual claim "these positions depend on the same thing" — not statistical correlation. Saying how much they move together would need a price history this service does not have, and would be a weaker claim dressed as a stronger one.
+
+**Recursive-collateral detection is deliberately absent.** Checked live across the 77 live Morpho markets on Base: zero cycles, and zero assets that are both collateral and loan asset. Worse, the recursion that killed Stream was not in the lending graph at all — it was in the *issuance* of the synthetic (xUSD backed by positions funded with the borrowed USDC). A cycle detector would have reported "all clear" throughout the collapse. False safety is worse than a false alarm.
 
 ### How long is a signal good for?
 

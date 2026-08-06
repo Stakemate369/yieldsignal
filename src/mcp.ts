@@ -17,6 +17,9 @@ import { ASSET_IDS, LENDING_ASSET_IDS } from "./market-data/types.js";
 import { computeDurability } from "./signal/durability.js";
 import { computeCapacity } from "./signal/capacity.js";
 import { computeSensitivity } from "./signal/sensitivity.js";
+import { computeExposure } from "./signal/exposure.js";
+import { collectExposureFactors } from "./market-data/exposureFactors.js";
+import { parsePositions } from "./signal/parsePositions.js";
 import { collectBorrowRateCurves } from "./market-data/rateCurve.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
@@ -52,6 +55,19 @@ const DURABILITY_INPUT_SHAPE = {
 
 const SENSITIVITY_TOOL_DESCRIPTION =
   "How close a Base lending market is to the kink where borrow rates explode. Returns, per protocol, the current utilization, the kink read from the protocol's own interest rate curve, the headroom in bps, and the borrow APY at points around the kink — plus how many times the borrow cost multiplies just past it. Measured on a live reading: Compound USDC sat 0.17 points below its kink, where borrow cost goes from ~4% to ~16%. Aave and Compound only: Morpho's adaptive IRM has no static curve to read and DefiLlama-sourced protocols expose none, so they are marked unmeasured and never assumed stable. Describes the current state of the curve, not a prediction that utilization will move.";
+
+const EXPOSURE_TOOL_DESCRIPTION =
+  "Shared risk exposure across a declared portfolio. Give it your positions (protocol:usd pairs) and it returns, per factor, how much of your capital sits behind the same collateral, price oracle or vault curator — and through which venues it gets there. This is the question the market does not answer: depeg and hack alerts tell you an event happened, not whether you are two hops from it. In the Stream Finance collapse only 1 of ~320 MetaMorpho vaults held the broken asset directly, yet $93M of loss became $285M of contagion. Measured live: a Morpho USDC vault sits 93.7% behind cbBTC while Compound's USDC market is 43.1% — holding both is one risk in two wrappers. Morpho is attributed per isolated market and Compound by its real posted-collateral basket; Aave is reported unattributed, because a v3 supplier is exposed to the entire pool and splitting that across assets would imply diversification that does not exist. Structural shared exposure, not a correlation estimate.";
+
+const EXPOSURE_INPUT_SHAPE = {
+  asset: z
+    .enum(LENDING_ASSET_IDS)
+    .optional()
+    .describe("Which Base lending market the positions are in: USDC or WETH. Defaults to USDC."),
+  positions: z
+    .string()
+    .describe("Your positions as comma-separated protocol:usd pairs, e.g. \"aave:200000,morpho:150000\". Known protocols: aave, morpho, compound, moonwell, euler, fluid."),
+};
 
 const CAPACITY_INPUT_SHAPE = {
   // Enum restrito a LENDING_ASSET_IDS de propósito: pedir capacidade de
@@ -257,7 +273,7 @@ export async function createMcpRequestHandler(
      */
     async function derivedToolResult<T>(
       asset: (typeof ASSET_IDS)[number],
-      route: "durability" | "capacity" | "sensitivity",
+      route: "durability" | "capacity" | "sensitivity" | "exposure",
       // Assíncrona porque a sensibilidade lê a curva de juros on-chain além das
       // taxas; as outras duas continuam derivando de forma síncrona.
       derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T | Promise<T>,
@@ -338,6 +354,34 @@ export async function createMcpRequestHandler(
           ),
         ),
       ),
+    );
+
+    mcpServer.tool(
+      "get_shared_exposure",
+      EXPOSURE_TOOL_DESCRIPTION,
+      EXPOSURE_INPUT_SHAPE,
+      paidSignal(async ({ asset = "USDC", positions }) => {
+        // Mesmo validador do REST — input de robô é não-confiável do mesmo
+        // jeito, e um protocolo escrito errado que passasse em silêncio faria o
+        // relatório ignorar parte da carteira sem dizer que ignorou.
+        const parsed = parsePositions(positions);
+        if (!parsed.ok) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ error: parsed.error }) }],
+            isError: true,
+          };
+        }
+        return derivedToolResult(asset, "exposure", async () =>
+          computeExposure(
+            asset,
+            parsed.positions,
+            await collectExposureFactors(
+              asset,
+              parsed.positions.map((p) => p.protocol),
+            ),
+          ),
+        );
+      }),
     );
 
     return mcpServer;

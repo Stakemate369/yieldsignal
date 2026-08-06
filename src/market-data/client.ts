@@ -16,8 +16,17 @@ import { BASE_MAINNET } from "../config/networks.js";
  * com cobertura 0 de 5 — a degradação graciosa funcionava, mas entregava um
  * relatório vazio. Com o agrupamento, o mesmo trabalho cabe em poucas chamadas.
  */
+/**
+ * `BASE_RPC_URL` vazio mantém o default da chain (o RPC público), que é o
+ * comportamento histórico. Lido de `process.env` direto, e não via `loadEnv()`,
+ * de propósito: este módulo é importado por leitores que rodam em teste e em
+ * `npm run signal` SEM credencial nenhuma, e `loadEnv` exige as chaves da CDP —
+ * puxá-lo aqui transformaria "escolher o RPC" em "precisar de carteira".
+ */
+const rpcUrl = process.env.BASE_RPC_URL?.trim();
+
 export const basePublicClient = createPublicClient({
   chain: BASE_MAINNET.chain,
-  transport: http(),
+  transport: rpcUrl ? http(rpcUrl) : http(),
   batch: { multicall: true },
 });

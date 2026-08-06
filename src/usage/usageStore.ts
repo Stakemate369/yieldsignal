@@ -43,7 +43,14 @@ export type UsageKind =
   /** Rota inexistente — mede quanto do tráfego erra o caminho. */
   | "not_found";
 
-export type UsageRoute = "signal" | "decision" | "durability" | "capacity" | "sensitivity" | "other";
+export type UsageRoute =
+  | "signal"
+  | "decision"
+  | "durability"
+  | "capacity"
+  | "sensitivity"
+  | "exposure"
+  | "other";
 export type UsageChannel = "rest" | "mcp";
 
 export interface UsageEvent {
@@ -70,6 +77,7 @@ export function routeFromResourceUrl(url: string | undefined): UsageRoute {
   if (url.includes("/durability/")) return "durability";
   if (url.includes("/capacity/")) return "capacity";
   if (url.includes("/sensitivity/")) return "sensitivity";
+  if (url.includes("/exposure/")) return "exposure";
   return "other";
 }
 

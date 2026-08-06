@@ -25,6 +25,7 @@ describe("limite de tamanho da description das rotas pagas", () => {
     ...Object.entries(FINAL_DESCRIPTIONS.durability).map(([asset, d]) => [`durability/${asset}`, d] as const),
     ...Object.entries(FINAL_DESCRIPTIONS.capacity).map(([asset, d]) => [`capacity/${asset}`, d] as const),
     ...Object.entries(FINAL_DESCRIPTIONS.sensitivity).map(([asset, d]) => [`sensitivity/${asset}`, d] as const),
+    ...Object.entries(FINAL_DESCRIPTIONS.exposure).map(([asset, d]) => [`exposure/${asset}`, d] as const),
   ];
 
   it("cobre todas as rotas pagas", () => {
@@ -33,7 +34,7 @@ describe("limite de tamanho da description das rotas pagas", () => {
     // durabilidade + 2 de capacidade + 2 de sensibilidade — as três últimas são
     // só LendingAssetId (staking não tem mercado de empréstimo, a DefiLlama não
     // itemiza incentivo nos 5 protocolos de staking, e não há curva de juros).
-    expect(todas).toHaveLength(12);
+    expect(todas).toHaveLength(14);
   });
 
   it.each(todas)("%s cabe no limite do facilitador", (rota, descricao) => {

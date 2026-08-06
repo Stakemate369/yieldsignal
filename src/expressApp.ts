@@ -18,6 +18,9 @@ import { computeDurability } from "./signal/durability.js";
 import { computeCapacity } from "./signal/capacity.js";
 import { computeSensitivity } from "./signal/sensitivity.js";
 import { collectBorrowRateCurves } from "./market-data/rateCurve.js";
+import { computeExposure } from "./signal/exposure.js";
+import { collectExposureFactors } from "./market-data/exposureFactors.js";
+import { parsePositions } from "./signal/parsePositions.js";
 import { computeAccuracyScore } from "./attestation/accuracyScore.js";
 import { computeWindowedAccuracy } from "./attestation/windowedAccuracy.js";
 import { fetchSignalAttestations } from "./attestation/queryAttestations.js";
@@ -91,6 +94,19 @@ export const DURABILITY_PATHS: Record<LendingAssetId, string> = {
 export const CAPACITY_PATHS: Record<LendingAssetId, string> = {
   USDC: "/capacity/usdc-base-yield",
   WETH: "/capacity/weth-base-yield",
+};
+
+// CAMADA 1 (analítica): rotas de EXPOSIÇÃO — "estou em N protocolos, mas atrás
+// de quantos riscos distintos?". Primeira rota que RECEBE dado do comprador
+// (`?positions=`), daí a validação rígida em signal/parsePositions.ts.
+export const EXPOSURE_PATHS: Record<LendingAssetId, string> = {
+  USDC: "/exposure/usdc-base-yield",
+  WETH: "/exposure/weth-base-yield",
+};
+
+const EXPOSURE_DESCRIPTIONS: Record<LendingAssetId, string> = {
+  USDC: "Shared risk exposure across declared positions: pass ?positions=aave:200000,morpho:150000 and get, per factor, how much capital sits behind the same collateral, oracle or curator, and via which venues. Morpho is attributed per isolated market, Compound by its real posted-collateral basket; Aave is unattributed because a v3 supplier is exposed to the whole pool, never split across assets.",
+  WETH: "Shared risk exposure across declared WETH positions — same contract as the USDC exposure route. Pass ?positions=aave:100000,morpho:50000. Protocols whose collateral composition cannot be established are reported unattributed with the reason, never split across assets to imply diversification.",
 };
 
 // CAMADA 1 (analítica): rotas de SENSIBILIDADE — "a que distância este mercado
@@ -167,6 +183,7 @@ export const FINAL_DESCRIPTIONS: {
   durability: Record<LendingAssetId, string>;
   capacity: Record<LendingAssetId, string>;
   sensitivity: Record<LendingAssetId, string>;
+  exposure: Record<LendingAssetId, string>;
 } = {
   signal: Object.fromEntries(
     (Object.keys(ROUTE_DESCRIPTIONS) as AssetId[]).map((a) => [a, ROUTE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
@@ -188,6 +205,9 @@ export const FINAL_DESCRIPTIONS: {
       a,
       SENSITIVITY_DESCRIPTIONS[a] + ACCURACY_POINTER,
     ]),
+  ) as Record<LendingAssetId, string>,
+  exposure: Object.fromEntries(
+    (Object.keys(EXPOSURE_DESCRIPTIONS) as LendingAssetId[]).map((a) => [a, EXPOSURE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
   ) as Record<LendingAssetId, string>,
 };
 
@@ -238,6 +258,10 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${SENSITIVITY_PATHS[asset]}`,
         { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.sensitivity[asset] },
+      ]),
+      ...(Object.keys(EXPOSURE_PATHS) as LendingAssetId[]).map((asset) => [
+        `GET ${EXPOSURE_PATHS[asset]}`,
+        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.exposure[asset] },
       ]),
     ]),
   });
@@ -611,7 +635,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   async function respondWithDerived<T>(
     res: express.Response,
     asset: AssetId,
-    route: "durability" | "capacity" | "sensitivity",
+    route: "durability" | "capacity" | "sensitivity" | "exposure",
     // Aceita derivação assíncrona porque /sensitivity precisa ler a curva de
     // juros on-chain além das taxas — as outras duas continuam síncronas.
     derive: (readings: Awaited<ReturnType<typeof collectRates>>) => T | Promise<T>,
@@ -650,6 +674,37 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       return { ok: false, error: "amountUsd must be a positive number when provided" };
     }
     return { ok: true, amountUsd: n };
+  }
+
+  async function respondWithExposure(
+    res: express.Response,
+    asset: LendingAssetId,
+    query: Record<string, unknown>,
+  ): Promise<void> {
+    const parsed = parsePositions(query.positions);
+    if (!parsed.ok) {
+      // Mesma razão do 400 na rota de capacidade: o pagamento já liquidou, e
+      // input inválido é responsabilidade do chamador — mas a mensagem tem que
+      // deixar ele se autocorrigir. Contado como bad_request pra não abrir
+      // buraco no funil (pagou, liquidou, e nunca apareceu served nem failed).
+      try {
+        await recordUsage({ kind: "failed", route: "exposure", channel: "rest", asset, outcome: "bad_request" });
+      } catch {
+        /* telemetria nunca altera a resposta */
+      }
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    await respondWithDerived(res, asset, "exposure", async () =>
+      computeExposure(
+        asset,
+        parsed.positions,
+        await collectExposureFactors(
+          asset,
+          parsed.positions.map((p) => p.protocol),
+        ),
+      ),
+    );
   }
 
   async function respondWithCapacity(
@@ -696,7 +751,13 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   function logUsage(
     asset: AssetId,
     freeTrial: boolean,
-    channel: "rest" | "rest-decision" | "rest-durability" | "rest-capacity" | "rest-sensitivity" = "rest",
+    channel:
+      | "rest"
+      | "rest-decision"
+      | "rest-durability"
+      | "rest-capacity"
+      | "rest-sensitivity"
+      | "rest-exposure" = "rest",
   ): void {
     logger.info({ channel, asset, freeTrial }, "sinal servido");
   }
@@ -796,6 +857,32 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     );
   }
 
+  for (const asset of Object.keys(EXPOSURE_PATHS) as LendingAssetId[]) {
+    app.get(
+      EXPOSURE_PATHS[asset],
+      usageEntryMiddleware("exposure", asset),
+      (req, res, next) => {
+        if (req.query.trial !== "1") {
+          next();
+          return;
+        }
+        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
+        if (consumeFreeTrial(ip)) {
+          res.setHeader("X-Free-Trial", "true");
+          logUsage(asset, true, "rest-exposure");
+          void respondWithExposure(res, asset, req.query as Record<string, unknown>);
+          return;
+        }
+        next();
+      },
+      paymentMiddlewareFromHTTPServer(server),
+      async (req, res) => {
+        logUsage(asset, false, "rest-exposure");
+        await respondWithExposure(res, asset, req.query as Record<string, unknown>);
+      },
+    );
+  }
+
   for (const asset of Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]) {
     app.get(
       SENSITIVITY_PATHS[asset],
@@ -883,6 +970,9 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     // Mesmo motivo de /capacity e /durability: resolve pra USDC, não pro
     // FLAGSHIP_ASSET, porque staking não tem rota de sensibilidade.
     "/sensitivity": SENSITIVITY_PATHS.USDC,
+    "/exposure/usdc": EXPOSURE_PATHS.USDC,
+    "/exposure/weth": EXPOSURE_PATHS.WETH,
+    "/exposure": EXPOSURE_PATHS.USDC,
   };
   for (const [alias, canonical] of Object.entries(SHORT_ALIASES)) {
     app.get(alias, (req, res) => {
@@ -921,6 +1011,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         durability: Object.values(DURABILITY_PATHS),
         capacity: Object.values(CAPACITY_PATHS),
         sensitivity: Object.values(SENSITIVITY_PATHS),
+        exposure: Object.values(EXPOSURE_PATHS),
         free: [
           "/accuracy.json",
           "/track-record.json",

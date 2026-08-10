@@ -17,6 +17,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:paid": "tsx scripts/testPaidCall.mts",
+    "bazaar:check": "node scripts/refreshBazaarPrices.mjs",
+    "bazaar:sync": "node scripts/refreshBazaarPrices.mjs --pagar",
     "verify-integrations": "npm run build && node scripts/verifyIntegrations.mjs"
   },
   "dependencies": {

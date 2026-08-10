@@ -16,7 +16,15 @@ npm run withdraw            # saca o USDC acumulado pra OWNER_WALLET_ADDRESS —
 npm run register-schema     # registra o schema EAS uma única vez (mainnet, gasta gas real) — pede "CONFIRM"
 npm run attest               # publica UMA atestação on-chain do sinal atual (mainnet, gasta gas real) — pede "CONFIRM"
 npm run register-agent      # mint único de identidade ERC-8004 (mainnet, gasta gas real) — pede "CONFIRM"
+npm run bazaar:check        # compara o preço anunciado no índice do Bazaar com o que cada rota cobra hoje — não gasta nada
+npm run bazaar:sync         # paga UMA chamada real em cada rota divergente pra reescrever o preço no índice (gasta USDC da carteira compradora)
 ```
+
+### O índice do Bazaar é EMPURRADO por venda, não consultado
+
+O `lastUpdated` de cada entrada bate exatamente com o timestamp da última liquidação naquela rota: o Bazaar guarda o retrato tirado no último pagamento, e não há endpoint pra atualizar a entrada de outro jeito. Consequência prática: **toda mudança de preço deixa as 14 entradas anunciando o valor antigo até que cada rota receba um pagamento novo** — e um comprador automático que leia o índice monta a transação com o valor de lá, é recusado, e o comportamento padrão diante de recusa repetida é marcar o endpoint como quebrado. Por isso `bazaar:sync` existe e por isso ele roda depois de qualquer mexida em `PRICE_USD`/`ANALYTICS_PRICE_USD`/`DECISION_PRICE_USD`.
+
+Ao varrer o índice, pagine até `pagination.total` — são ~14.500 recursos. Uma varredura parcial (as primeiras 1.200 entradas) fez concluir em 2026-08-10 que nenhuma rota estava indexada, quando as 14 estavam.
 
 Não existe script de lint configurado ainda.
 

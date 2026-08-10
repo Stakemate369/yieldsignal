@@ -16,7 +16,31 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 
 // Rota alvo: passe o path como argumento, ou usa a vitrine por padrão.
 //   node scripts/indexMissingRoutes.mjs /decision/weth-base-yield
-const URL = "https://yieldsignal.vercel.app" + (process.argv[2] ?? "/signal/eth-staking-yield");
+//   node scripts/indexMissingRoutes.mjs decision/weth-base-yield     (equivalente)
+//
+// A rota é normalizada em vez de concatenada crua por causa de um erro real no
+// Git Bash do Windows: o MSYS converte um argumento que começa com "/" em
+// caminho Windows ANTES do Node ver, então `/signal/usdc-base-yield` chega como
+// `C:/Program Files/Git/signal/usdc-base-yield`. A concatenação direta produzia
+// `https://yieldsignal.vercel.appC:/...` e o script morria com um ENOTFOUND
+// para o host `yieldsignal.vercel.appc` — mensagem que não sugere em nada a
+// causa. Aceitar as duas formas e reextrair o caminho resolve sem exigir que
+// quem chama lembre de exportar MSYS_NO_PATHCONV.
+const BASE = "https://yieldsignal.vercel.app";
+
+function normalizarRota(bruta) {
+  if (!bruta) return "/signal/eth-staking-yield";
+  // Desfaz a conversão do MSYS: fica só do primeiro segmento conhecido em diante.
+  const m = bruta.match(/(signal|decision|durability|capacity|sensitivity|exposure)\/[a-z0-9-]+/i);
+  if (m) return "/" + m[0];
+  return bruta.startsWith("/") ? bruta : "/" + bruta;
+}
+
+const ROTA = normalizarRota(process.argv[2]);
+const URL = BASE + ROTA;
+if (process.argv[2] && ROTA !== process.argv[2] && ROTA !== "/" + process.argv[2]) {
+  console.log(`rota normalizada: ${process.argv[2]} -> ${ROTA}`);
+}
 
 /** O motivo da recusa vem no header `Payment-Required` (base64), campo `error`. */
 function motivoDoRecusado(res) {

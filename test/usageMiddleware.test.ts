@@ -2,16 +2,28 @@ import { describe, it, expect, vi } from "vitest";
 import { classifyIncoming, usageEntryMiddleware } from "../src/usage/usageMiddleware.js";
 
 describe("classifyIncoming", () => {
-  it("conta como tentativa de pagamento quando vem header X-PAYMENT", () => {
+  it("conta como tentativa de pagamento quando vem o header legado X-PAYMENT", () => {
     expect(classifyIncoming({ paymentHeader: "eyJ4NDAy..." })).toBe("paid_attempt");
   });
 
-  it("sem pagamento é 402 servido — inclui sonda de descoberta", () => {
-    expect(classifyIncoming({ paymentHeader: undefined })).toBe("challenged");
+  // Regressão de 2026-08-10: checando só `x-payment`, paid_attempt marcou ZERO
+  // durante toda a vida do serviço. O x402 v2 manda `payment-signature`, e
+  // pagamento real caía em `challenged` — o funil não conseguia separar "tentou
+  // pagar" de "desistiu". Ordem e conjunto espelham @x402/express.
+  it("conta como tentativa de pagamento com o header v2 payment-signature", () => {
+    expect(classifyIncoming({ paymentSignature: "eyJ2Mi4u...", paymentHeader: undefined })).toBe("paid_attempt");
   });
 
-  it("header vazio não conta como tentativa de pagamento", () => {
-    expect(classifyIncoming({ paymentHeader: "" })).toBe("challenged");
+  it("qualquer um dos dois headers basta", () => {
+    expect(classifyIncoming({ paymentSignature: "a", paymentHeader: "b" })).toBe("paid_attempt");
+  });
+
+  it("sem pagamento é 402 servido — inclui sonda de descoberta", () => {
+    expect(classifyIncoming({ paymentSignature: undefined, paymentHeader: undefined })).toBe("challenged");
+  });
+
+  it("headers vazios não contam como tentativa de pagamento", () => {
+    expect(classifyIncoming({ paymentSignature: "", paymentHeader: "" })).toBe("challenged");
   });
 });
 

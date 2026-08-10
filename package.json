@@ -20,7 +20,8 @@
     "bazaar:check": "node scripts/refreshBazaarPrices.mjs",
     "bazaar:sync": "node scripts/refreshBazaarPrices.mjs --pagar",
     "fund-buyer": "node scripts/fundBuyer.mjs",
-    "verify-integrations": "npm run build && node scripts/verifyIntegrations.mjs"
+    "verify-integrations": "npm run build && node scripts/verifyIntegrations.mjs",
+    "discovery:check": "node scripts/checkDiscoveryHealth.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.53.0",

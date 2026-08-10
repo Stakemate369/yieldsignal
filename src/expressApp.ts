@@ -47,6 +47,7 @@ import { readDeployDrift } from "./notify/deployDrift.js";
 import { buildTrackRecord } from "./attestation/trackRecord.js";
 import { TRACK_RECORD_PAGE_HTML } from "./trackRecordPage.js";
 import { AGENT_CARD_JSON } from "./agentCard.js";
+import { toPublicPersistence, renderPersistencePage } from "./persistencePublic.js";
 import { buildOpenApi, buildWellKnownX402, type DiscoveryRoute } from "./discoveryDocument.js";
 import { FAVICON_ICO } from "./favicon.js";
 
@@ -294,7 +295,11 @@ export const SHORT_ALIASES: Record<string, string> = {
   "/persistence/usdc": PERSISTENCE_PATHS.USDC,
   "/persistence/weth": PERSISTENCE_PATHS.WETH,
   "/persistence/eth-staking": PERSISTENCE_PATHS.ETH_STAKING,
-  "/persistence": PERSISTENCE_PATHS[FLAGSHIP_ASSET],
+  // `/persistence` puro NÃO redireciona pra rota paga, diferente de /signal e
+  // /decision: ali mora a PÁGINA PÚBLICA do relatório (ver persistencePublic.ts).
+  // Um agente que chuta a raiz recebe o relatório histórico e a lista das rotas
+  // pagas com preço — mais informativo que um 308 pra um 402 —, e a página é o
+  // artefato que atrai quem ainda não sabe que este serviço existe.
 };
 
 /**
@@ -723,6 +728,55 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   // mais fácil de consultar, mais adoção. Derivado 1:1 do mesmo track record
   // (fonte = EAS, verificável), então não é auto-declarado. EAS_SCHEMA_UID
   // vazio degrada pra score vazio (nada atestado ainda), nunca 5xx.
+  /**
+   * ARTEFATO PÚBLICO da persistência — gratuito, sem autenticação, e é o único
+   * canal de divulgação que não depende de plataforma de terceiro: uma medição
+   * que ninguém mais publica, reproduzível contra o EAS por quem quiser
+   * conferir. Mesma lógica que já fez o serviço entrar no x402scan.
+   *
+   * O recorte (o que é grátis e o que continua pago) está em persistencePublic.ts.
+   */
+  const publicPersistence = async () => {
+    const report = await cachedPersistence();
+    if (!report) return null;
+    return toPublicPersistence(report, {
+      schemaUid: hasAttestationSchema ? attestSchemaUid : null,
+      attester: signer.address,
+      paidRoutes: Object.values(PERSISTENCE_PATHS),
+    });
+  };
+
+  app.get("/persistence.json", async (_req, res) => {
+    try {
+      const publico = await publicPersistence();
+      if (!publico) {
+        res.status(503).json({ error: "attested history unavailable right now — retry shortly" });
+        return;
+      }
+      // Cache de borda: o dado só muda quando entra atestação nova (~1h). Sem
+      // isto, cada rastreador custaria uma invocação de função e uma consulta
+      // ao EASScan — e o objetivo desta rota é justamente ser muito rastreada.
+      res.setHeader("Cache-Control", "public, max-age=600, stale-while-revalidate=3600");
+      res.json(publico);
+    } catch (err) {
+      logger.error({ err }, "falha servindo /persistence.json");
+      res.status(503).json({ error: "attested history unavailable right now — retry shortly" });
+    }
+  });
+
+  app.get("/persistence", async (_req, res) => {
+    let publico: Awaited<ReturnType<typeof publicPersistence>> = null;
+    try {
+      publico = await publicPersistence();
+    } catch (err) {
+      // Página sem dado é melhor que 5xx: quem chegou aqui veio de busca ou de
+      // link, e um erro nu não explica nada nem deixa caminho pro resto.
+      logger.warn({ err }, "servindo /persistence sem dado — histórico ilegível agora");
+    }
+    res.setHeader("Cache-Control", "public, max-age=600, stale-while-revalidate=3600");
+    res.type("html").send(renderPersistencePage(publico));
+  });
+
   app.get("/accuracy.json", async (_req, res) => {
     if (!hasAttestationSchema) {
       res.json({
@@ -905,6 +959,8 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     const paginas = [
       { loc: "/", priority: "1.0", changefreq: "daily" },
       { loc: "/track-record", priority: "0.9", changefreq: "hourly" },
+      { loc: "/persistence", priority: "0.9", changefreq: "hourly" },
+      { loc: "/persistence.json", priority: "0.7", changefreq: "hourly" },
       { loc: "/accuracy.json", priority: "0.6", changefreq: "hourly" },
       { loc: "/openapi.json", priority: "0.5", changefreq: "weekly" },
       { loc: "/agent-card.json", priority: "0.5", changefreq: "weekly" },
@@ -1401,6 +1457,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         persistence: Object.values(PERSISTENCE_PATHS),
         free: [
           "/accuracy.json",
+          "/persistence.json",
           "/track-record.json",
           "/guarantee/terms.json",
           "/agent-card.json",

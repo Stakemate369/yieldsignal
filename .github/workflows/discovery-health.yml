@@ -1,0 +1,40 @@
+# Guarda dos CANAIS DE DESCOBERTA.
+#
+# Todo canal deste serviço é EMPURRADO, nenhum é consultado: o Bazaar guarda o
+# retrato da última venda de cada rota, o registro MCP guarda o último
+# server.json publicado, o /openapi.json é gerado pelo servidor. Os três
+# divergem em silêncio — o site segue no ar, a telemetria não acusa, e quem
+# quebra é o agente comprador que leu o anúncio errado.
+#
+# Já custou duas vezes: as 4 rotas analíticas anunciaram $0.10 cobrando $0.25
+# por semanas, e a família /persistence nasceu fora do índice. Nos dois casos a
+# descoberta foi acidental. Este job existe pra não depender de acidente.
+#
+# Não gasta nada e não usa credencial: só GET público e leitura do desafio 402.
+name: Discovery health
+
+on:
+  schedule:
+    # Segunda-feira, 12:00 UTC. Semanal é a cadência certa: o que ele detecta
+    # muda quando o catálogo muda (raro), e alerta que dispara à toa vira ruído
+    # que o dono aprende a ignorar.
+    - cron: "0 12 * * 1"
+  # Também sob demanda, pra conferir logo depois de um lançamento.
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Sem `npm ci`: o script usa só `fetch` e `node:fs`. Instalar dependência
+      # aqui seria minutos de CI por semana para nada.
+      - name: Conferir Bazaar, registro MCP, /openapi.json e artefatos públicos
+        env:
+          # Opcionais. Sem eles a própria falha do job notifica pelo GitHub.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node scripts/checkDiscoveryHealth.mjs

@@ -1,0 +1,68 @@
+# Publica o cliente npm quando (e só quando) a versão muda.
+#
+# O npm é um dos canais de descoberta do serviço, e até aqui era o único
+# publicado à mão — ou seja, o único que dependia de alguém lembrar. Publicar
+# tarde não quebra nada visivelmente; só deixa o pacote anunciando um catálogo
+# que já mudou, que é a mesma classe de divergência silenciosa do Bazaar.
+#
+# Idempotente por construção: se a versão do package.json já existe no registro,
+# o job encerra sem publicar. Rodar duas vezes no mesmo commit não erra.
+name: Publish npm client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/package.json"
+      - "client/src/**"
+      - "client/README.md"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # O contexto `secrets` NÃO está disponível em `if:` de passo — só `env`
+    # está. Sem esta ponte, a condição do passo abaixo nunca avaliaria certo e o
+    # job tentaria publicar sem token, falhando com erro de autenticação em vez
+    # do aviso claro que queremos.
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Esta versão já está publicada?
+        id: check
+        working-directory: client
+        run: |
+          NOME=$(node -p "require('./package.json').name")
+          VERSAO=$(node -p "require('./package.json').version")
+          echo "nome=$NOME" >> "$GITHUB_OUTPUT"
+          echo "versao=$VERSAO" >> "$GITHUB_OUTPUT"
+          # `npm view` sai com erro quando a versão não existe — é esse o caso
+          # que queremos publicar, então o erro não pode derrubar o passo.
+          if npm view "$NOME@$VERSAO" version >/dev/null 2>&1; then
+            echo "publicar=nao" >> "$GITHUB_OUTPUT"
+            echo "$NOME@$VERSAO já está no registro — nada a fazer."
+          else
+            echo "publicar=sim" >> "$GITHUB_OUTPUT"
+            echo "$NOME@$VERSAO ainda não existe — vai publicar."
+          fi
+
+      - name: Sem NPM_TOKEN, avisar em vez de falhar em silêncio
+        if: steps.check.outputs.publicar == 'sim' && env.NPM_TOKEN == ''
+        run: |
+          echo "::warning::${{ steps.check.outputs.nome }}@${{ steps.check.outputs.versao }} está pronto para publicar, mas o segredo NPM_TOKEN não está configurado no repositório. Publique à mão com 'npm publish' ou adicione o token em Settings > Secrets and variables > Actions."
+
+      - name: Instalar, construir e publicar
+        if: steps.check.outputs.publicar == 'sim' && env.NPM_TOKEN != ''
+        working-directory: client
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: |
+          npm ci
+          npm run build
+          npm publish --access public

@@ -9,7 +9,25 @@ export const TRACK_RECORD_PAGE_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>YieldSignal — track record</title>
+<title>YieldSignal — public on-chain track record</title>
+<!--
+  Esta página é o argumento de confiança do serviço, e é a única que pode ser
+  divulgada sem dar produto de graça: o que ela mostra já está publicado de
+  forma permanente e pública na blockchain (atestações EAS na Base), então
+  torná-la encontrável não entrega nada que já não seja aberto. Ver a nota
+  equivalente em landingPage.ts.
+-->
+<meta name="description" content="Every YieldSignal reading attested on-chain (EAS, Base mainnet), compared against what the market actually did afterwards. A public, permanent accuracy record that does not depend on this server staying up.">
+<link rel="canonical" href="https://yieldsignal.vercel.app/track-record">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="YieldSignal">
+<meta property="og:url" content="https://yieldsignal.vercel.app/track-record">
+<meta property="og:title" content="YieldSignal — public on-chain track record">
+<meta property="og:description" content="What we said then vs. what is true now, attested on-chain via EAS and verifiable without trusting this server.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="YieldSignal — public on-chain track record">
+<meta name="twitter:description" content="What we said then vs. what is true now, attested on-chain via EAS.">
+
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; background: #fff; }

@@ -1,6 +1,6 @@
 # yieldsignal-client
 
-Thin [x402](https://x402.org) client for [YieldSignal](https://yieldsignal.vercel.app) — real-time, risk-weighted USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base, plus ETH liquid staking APY across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH on Ethereum mainnet. $0.01 per call.
+Thin [x402](https://x402.org) client for [YieldSignal](https://yieldsignal.vercel.app) — real-time, risk-weighted USDC/WETH lending APY across Aave, Compound, Morpho, Moonwell, Euler and Fluid on Base, plus ETH liquid staking APY across Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH on Ethereum mainnet. $0.10 per signal call, $0.25 per analytics report, $0.50 per decision — no API key, no signup, no free tier.
 
 **Six products, not one.** The signal answers *what pays best right now* — which is a commodity. The other five answer questions nothing else sells:
 

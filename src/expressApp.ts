@@ -776,6 +776,57 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     res.type("application/json").send(AGENT_CARD_JSON);
   });
 
+  // Descoberta por BUSCADOR — o par que faltava dos documentos acima. Os de
+  // cima descrevem o serviço pra máquina que já fala x402; estes dois dizem a
+  // um rastreador comum o que existe e o que vale indexar.
+  //
+  // Só as páginas GRÁTIS entram no sitemap, e isso não é descuido: as 14 rotas
+  // pagas devolvem 402, que um rastreador interpreta como erro — listá-las
+  // gastaria orçamento de rastreio pra ensinar ao buscador que o site tem 14
+  // páginas quebradas. Quem precisa da enumeração das rotas pagas é indexador
+  // de x402, e esse lê /openapi.json e /.well-known/x402.
+  app.get("/robots.txt", (req, res) => {
+    const base = baseUrlOf(req);
+    res
+      .type("text/plain")
+      .set("Cache-Control", "public, max-age=86400")
+      .send(
+        [
+          "User-agent: *",
+          "Allow: /",
+          // Rota interna de leitura do funil: exige segredo e devolve 401, mas
+          // não há motivo pra um rastreador nem tentar.
+          "Disallow: /usage.json",
+          "Disallow: /internal/",
+          `Sitemap: ${base}/sitemap.xml`,
+          "",
+        ].join("\n"),
+      );
+  });
+
+  app.get("/sitemap.xml", (req, res) => {
+    const base = baseUrlOf(req);
+    const paginas = [
+      { loc: "/", priority: "1.0", changefreq: "daily" },
+      { loc: "/track-record", priority: "0.9", changefreq: "hourly" },
+      { loc: "/accuracy.json", priority: "0.6", changefreq: "hourly" },
+      { loc: "/openapi.json", priority: "0.5", changefreq: "weekly" },
+      { loc: "/agent-card.json", priority: "0.5", changefreq: "weekly" },
+      { loc: "/guarantee/terms.json", priority: "0.3", changefreq: "monthly" },
+    ];
+    const xml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+      ...paginas.map(
+        (p) =>
+          `  <url><loc>${base}${p.loc}</loc><changefreq>${p.changefreq}</changefreq><priority>${p.priority}</priority></url>`,
+      ),
+      "</urlset>",
+      "",
+    ].join("\n");
+    res.type("application/xml").set("Cache-Control", "public, max-age=86400").send(xml);
+  });
+
   // /mcp fica de fora do middleware de pagamento do endpoint REST (esse
   // agora é escopado só na rota GET abaixo, não é mais `app.use()` global) —
   // já foi `app.use(RESOURCE_PATH, mw)` antes, mas isso quebrou o próprio

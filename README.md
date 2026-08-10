@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml/badge.svg)](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml)
 
-Risk-weighted yield signals for autonomous agents, paid per call via the [x402](https://x402.org) protocol — no API key, no signup. First 3 calls/day per IP are free via `?trial=1`.
+Risk-weighted yield signals for autonomous agents, paid per call via the [x402](https://x402.org) protocol — no API key, no signup. Every product route is paid: **$0.10** signal, **$0.25** analytics (durability/capacity/sensitivity/exposure), **$0.50** decision. There is no free tier and no bypass parameter.
 
 - **ETH liquid staking** (Ethereum mainnet) across **Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH**
 - **USDC and WETH lending** (Base) across **Aave, Compound, Morpho, Moonwell, Euler and Fluid**

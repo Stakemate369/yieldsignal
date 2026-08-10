@@ -110,9 +110,17 @@ relationship to the operator paid for a call:
 
 ```
 payer     0xfe2d5E9c5aE6E48B7F8b0b82AC4dE8B423bA0557   (a smart contract wallet, not an EOA)
-amount    $0.01 USDC on Base
+amount    $0.01 USDC on Base   (the price at the time; see the current 402 challenge for today's)
 tx        0xeb0728bd0f9d9e141fba125b4178339510a3bbdbc869632ae68cb7c7d9bc16c9
 ```
+
+**And it proves plumbing, not demand either — measured, not assumed.** Profiling every external
+payer on 2026-08-10 showed each of them sending between 91 and 461 USDC transfers to between 16 and
+346 distinct recipients over ~40 days: these are x402 crawlers paying a probe fee to index
+endpoints, not agents solving an allocation problem. All six external payments hit the same route
+(`/signal/usdc-base-yield`); not one bought a decision or any of the four risk reports, and none
+returned a second time. This section documents that payment *settles* end to end. It is not
+evidence that anyone needs the product yet, and it should not be read as such.
 
 The full receipt history is auditable by anyone: scan `Transfer` events of Base USDC
 (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`) with `to` = the payee address and group by sender.

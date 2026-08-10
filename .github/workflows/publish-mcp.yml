@@ -1,0 +1,92 @@
+# Republica a entrada do serviço no registro OFICIAL de MCP sempre que
+# `server.json` muda.
+#
+# Por que um workflow em vez de rodar o mcp-publisher na mão: o método `login
+# github` do publisher é device flow INTERATIVO (abre github.com/login/device e
+# espera um código digitado). Isso não roda sem uma pessoa presente, e foi
+# exatamente por isso que a entrada do registro passou de 17/07 a 10/08/2026
+# congelada na versão 1.0.0, descrevendo 1 dos 6 produtos — quem procurava
+# análise de risco no registro não encontrava este serviço. O método
+# `github-oidc` autentica pelo token OIDC do próprio runner, sem segredo
+# guardado e sem ninguém digitando nada.
+#
+# O namespace `io.github.Stakemate369/*` é verificado pelo próprio dono do
+# repositório, então o OIDC deste repo é prova suficiente — nenhum PAT precisa
+# existir.
+name: Publish MCP registry entry
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server.json"
+      - ".github/workflows/publish-mcp.yml"
+  # Permite republicar à mão pelo painel do GitHub sem precisar mexer no arquivo
+  # (útil se o registro perder a entrada ou se um publish falhar por rede).
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # Obrigatório pro login github-oidc: sem isso o runner não consegue emitir
+      # o token de identidade e o publisher cai de volta no fluxo interativo.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Falha ANTES de tentar publicar se a descrição estourar o limite do
+      # schema (100 caracteres). O registro rejeita com erro de validação
+      # genérico, difícil de ler no log; esta checagem diz exatamente qual campo
+      # e por quanto passou.
+      - name: Validar server.json contra os limites do schema
+        run: |
+          node -e '
+            const s = JSON.parse(require("fs").readFileSync("server.json", "utf8"));
+            const limites = { description: 100, title: 100, name: 200, version: 255 };
+            const erros = [];
+            for (const [campo, max] of Object.entries(limites)) {
+              const v = s[campo];
+              if (typeof v === "string" && v.length > max) {
+                erros.push(`${campo}: ${v.length} caracteres, máximo ${max}`);
+              }
+            }
+            if (!s.version) erros.push("version: ausente");
+            if (erros.length) { console.error("server.json inválido:\n" + erros.join("\n")); process.exit(1); }
+            console.log(`server.json ok — description ${s.description.length}/100, version ${s.version}`);
+          '
+
+      - name: Instalar mcp-publisher
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Autenticar no registro (OIDC do runner)
+        run: ./mcp-publisher login github-oidc
+
+      # O registro recusa republicar uma versão que já existe. Isso é proteção,
+      # não erro: significa que o server.json subiu sem bump de `version`. A
+      # mensagem abaixo diz o que fazer em vez de deixar o log cru.
+      - name: Publicar
+        run: |
+          if ! ./mcp-publisher publish 2>&1 | tee saida.log; then
+            if grep -qi "already exists\|version.*conflict" saida.log; then
+              echo "::error::Esta versão já está publicada. Suba o campo 'version' do server.json e faça o push de novo."
+            fi
+            exit 1
+          fi
+
+      - name: Conferir o que ficou publicado
+        run: |
+          sleep 5
+          curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=yieldsignal" \
+            | node -e '
+              let d = ""; process.stdin.on("data", c => d += c).on("end", () => {
+                const s = (JSON.parse(d).servers || [])[0];
+                if (!s) { console.error("entrada não encontrada no registro"); process.exit(1); }
+                console.log("versão publicada:", s.server.version);
+                console.log("descrição:", s.server.description);
+              });
+            '

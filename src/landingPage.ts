@@ -148,6 +148,27 @@ export function renderLandingPage(params: LandingPageParams): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>YieldSignal — verifiable ETH staking &amp; lending yield signals via x402</title>
+<!--
+  Descoberta por HUMANO. O resto do serviço já é descritível por máquina
+  (/openapi.json, /.well-known/x402, /agent-card.json, registro MCP), mas nada
+  aqui dizia a um buscador ou a um preview de link o que a página é: sem
+  description, sem canonical, sem Open Graph. As quatro rotas analíticas nunca
+  foram compradas por ninguém de fora (medido em 10/08/2026), e uma das razões
+  é que ninguém que não fale x402 conseguia sequer descobrir que elas existem.
+-->
+<meta name="description" content="Risk-weighted DeFi yield and risk intelligence sold per call over x402: yield signal, MOVE/HOLD decision, incentive durability, exit capacity, borrow-rate sensitivity and shared exposure. USDC/WETH lending on Base and ETH liquid staking, EIP-712 signed and attested on-chain via EAS.">
+<link rel="canonical" href="https://yieldsignal.vercel.app/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="YieldSignal">
+<meta property="og:url" content="https://yieldsignal.vercel.app/">
+<meta property="og:title" content="YieldSignal — verifiable yield &amp; risk signals for autonomous agents">
+<meta property="og:description" content="Six paid products over x402: signal, decision, durability, exit capacity, rate sensitivity and shared exposure. Every response EIP-712 signed; public on-chain track record via EAS.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="YieldSignal — verifiable yield &amp; risk signals for autonomous agents">
+<meta name="twitter:description" content="Six paid products over x402, EIP-712 signed, with a public on-chain track record.">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebAPI","name":"YieldSignal","url":"https://yieldsignal.vercel.app/","documentation":"https://yieldsignal.vercel.app/openapi.json","description":"Risk-weighted DeFi yield and risk intelligence sold per call over the x402 payment protocol.","provider":{"@type":"Organization","name":"YieldSignal"}}
+</script>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; background: #fff; }

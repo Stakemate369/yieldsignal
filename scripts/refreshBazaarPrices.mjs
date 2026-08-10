@@ -27,6 +27,7 @@ import "dotenv/config";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { wrapFetchWithPayment } from "@x402/fetch";
+import { garantirSaldo } from "./lib/tesouraria.mjs";
 
 /**
  * Memória local de "já paguei esta rota, o índice é que ainda não atualizou".
@@ -175,6 +176,18 @@ if (desatualizadas.length === 0) {
 
 // Mesma construção de `indexMissingRoutes.mjs`: `new CdpX402Client()` +
 // `getAddresses()`. Não existe `CdpX402Client.create()` neste SDK.
+// AUTOFINANCIAMENTO. Toda mudança de preço deixa as 14 entradas anunciando o
+// valor antigo, e corrigir custa uma chamada paga por rota. Isso NÃO pode
+// depender de aporte do dono: o dinheiro que a compradora gasta cai na
+// receptora, as duas dele — o ciclo é fechado e a receita acumulada já paga a
+// própria manutenção. Antes de começar, puxa da receptora o que faltar.
+const { recarregou, saldoUsd, motivo } = await garantirSaldo(Number(custo) / 1e6);
+if (!recarregou && saldoUsd * 1e6 < custo) {
+  console.log(`\naviso: saldo de $${saldoUsd.toFixed(2)} não cobre ${usd(custo)}.`);
+  if (motivo) console.log(`       ${motivo}`);
+  console.log("       vou pagar o que der, na ordem, e as restantes ficam pra próxima execução.");
+}
+
 const cliente = new CdpX402Client();
 const { evmAddress } = await cliente.getAddresses();
 console.log(`\npagando a partir de ${evmAddress}\n`);

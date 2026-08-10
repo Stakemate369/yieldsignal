@@ -78,15 +78,32 @@ jobs:
             exit 1
           fi
 
+      # Conferência que FALHA quando não bate. A primeira versão desta etapa só
+      # imprimia o resultado, e imprimiu "1.0.0" logo depois de um publish
+      # bem-sucedido de 1.1.0 — sem quebrar o build. Duas causas, as duas reais:
+      #
+      #   1. `?search=` sem filtro devolve TODAS as versões do servidor, e
+      #      `servers[0]` pode ser a mais antiga. O filtro correto é
+      #      `&version=latest`.
+      #   2. Imprimir não é verificar. Agora compara com o server.json do repo e
+      #      sai com erro se divergir — senão esta etapa dá a sensação de
+      #      conferência sem conferir nada, que é pior do que não existir.
       - name: Conferir o que ficou publicado
         run: |
           sleep 5
-          curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=yieldsignal" \
-            | node -e '
+          ESPERADA=$(node -p 'JSON.parse(require("fs").readFileSync("server.json","utf8")).version')
+          curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=yieldsignal&version=latest" \
+            | ESPERADA="$ESPERADA" node -e '
               let d = ""; process.stdin.on("data", c => d += c).on("end", () => {
-                const s = (JSON.parse(d).servers || [])[0];
-                if (!s) { console.error("entrada não encontrada no registro"); process.exit(1); }
-                console.log("versão publicada:", s.server.version);
-                console.log("descrição:", s.server.description);
+                const entrada = (JSON.parse(d).servers || [])[0];
+                if (!entrada) { console.error("::error::entrada não encontrada no registro"); process.exit(1); }
+                const s = entrada.server;
+                console.log("versão ativa no registro:", s.version);
+                console.log("descrição:", s.description);
+                if (s.version !== process.env.ESPERADA) {
+                  console.error(`::error::registro está em ${s.version}, mas server.json declara ${process.env.ESPERADA}`);
+                  process.exit(1);
+                }
+                console.log("confere com server.json.");
               });
             '

@@ -36,7 +36,7 @@ export type LendingAssetId = "USDC" | "WETH";
 //
 // ETH_STAKING entrou em 2026-07-20: categoria DIFERENTE de produto (staking
 // líquido em Ethereum mainnet, não lending em Base) — reaproveita toda a
-// mecânica já genérica em AssetId (rota x402, free trial, atestação
+// mecânica já genérica em AssetId (rota x402, atestação
 // automática, dashboard de track record) sem precisar duplicar nenhuma dessa
 // infra, mas NÃO entra em BASE_ASSETS/LendingAssetId (ver collectRates.ts).
 export type AssetId = LendingAssetId | "ETH_STAKING";

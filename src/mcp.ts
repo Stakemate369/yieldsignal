@@ -127,13 +127,22 @@ export async function createMcpRequestHandler(
   const resourceServer = new x402ResourceServer(facilitatorClient).register(network, new ExactEvmScheme());
   await resourceServer.initialize();
 
-  // Dois requisitos de pagamento distintos (preços diferentes) contra o MESMO
-  // resourceServer/carteira: o sinal cru no preço base, a decisão no premium.
+  // Três requisitos de pagamento distintos (preços diferentes) contra o MESMO
+  // resourceServer/carteira: o sinal cru no preço base, as 4 analíticas no
+  // intermediário, a decisão no premium. Os mesmos três preços das rotas REST
+  // (ver expressApp.ts) — canal diferente não pode cobrar valor diferente pelo
+  // mesmo produto, senão o comprador escolhe o canal pelo preço, não pelo uso.
   const signalAccepts = await resourceServer.buildPaymentRequirements({
     scheme: "exact",
     network,
     payTo: payToEvmAddress,
     price: env.PRICE_USD,
+  });
+  const analyticsAccepts = await resourceServer.buildPaymentRequirements({
+    scheme: "exact",
+    network,
+    payTo: payToEvmAddress,
+    price: env.ANALYTICS_PRICE_USD,
   });
   const decisionAccepts = await resourceServer.buildPaymentRequirements({
     scheme: "exact",
@@ -143,6 +152,7 @@ export async function createMcpRequestHandler(
   });
 
   const paidSignal = createPaymentWrapper(resourceServer, { accepts: signalAccepts });
+  const paidAnalytics = createPaymentWrapper(resourceServer, { accepts: analyticsAccepts });
   const paidDecision = createPaymentWrapper(resourceServer, { accepts: decisionAccepts });
 
   // Fato de pagamento — resourceServer daqui é uma instância PRÓPRIA do canal
@@ -167,7 +177,7 @@ export async function createMcpRequestHandler(
       paidSignal(async ({ asset = "USDC" }) => {
         try {
           // Toda chamada aqui é paga — `paidSignal()` só passa depois que o
-          // pagamento liquidou (o MCP não tem free trial, ao contrário do REST).
+          // pagamento liquidou.
           const readings = await collectRates(asset);
           const signal = computeSignal(readings);
           // Bloco de texto original SEM alteração (é o que fica assinado) +
@@ -262,9 +272,10 @@ export async function createMcpRequestHandler(
     );
 
     /**
-     * Tools analíticas (2026-08-05). Preço BASE (`paidSignal`), não o premium da
-     * decisão — produtos novos ainda sem track record próprio; primeiro o
-     * histórico verificável, depois o preço.
+     * Tools analíticas (2026-08-05). Preço PRÓPRIO (`paidAnalytics`), entre o
+     * sinal cru e o premium da decisão — nasceram no preço base por não terem
+     * track record, e a ordem "primeiro o histórico verificável, depois o
+     * preço" foi cumprida (sensibilidade atestada on-chain desde 2026-08-06).
      *
      * As duas assinam o SINAL derivado das mesmas leituras, mesmo contrato já
      * usado por `get_yield_decision`: o relatório é função determinística do
@@ -317,7 +328,7 @@ export async function createMcpRequestHandler(
       // protocolos de staking vêm da DefiLlama sem componente de incentivo
       // itemizado, então ETH_STAKING seria 0 de 5 decomponíveis em toda chamada.
       DURABILITY_INPUT_SHAPE,
-      paidSignal(async ({ asset = "USDC" }) =>
+      paidAnalytics(async ({ asset = "USDC" }) =>
         derivedToolResult(asset, "durability", (readings) => computeDurability(asset, readings)),
       ),
     );
@@ -326,7 +337,7 @@ export async function createMcpRequestHandler(
       "get_exit_capacity",
       CAPACITY_TOOL_DESCRIPTION,
       CAPACITY_INPUT_SHAPE,
-      paidSignal(async ({ asset = "USDC", amountUsd }) => {
+      paidAnalytics(async ({ asset = "USDC", amountUsd }) => {
         // `amountUsd` inválido (negativo/NaN) vira "sem veredito" em vez de erro:
         // diferente da decisão, aqui o parâmetro é OPCIONAL — a resposta sem ele
         // continua sendo útil (utilização e liquidez livre), então recusar a
@@ -342,7 +353,7 @@ export async function createMcpRequestHandler(
       // Mesmo enum restrito das outras duas analíticas: só mercado de empréstimo
       // tem curva de utilização.
       DURABILITY_INPUT_SHAPE,
-      paidSignal(async ({ asset = "USDC" }) =>
+      paidAnalytics(async ({ asset = "USDC" }) =>
         derivedToolResult(asset, "sensitivity", async (readings) =>
           computeSensitivity(
             asset,
@@ -360,7 +371,7 @@ export async function createMcpRequestHandler(
       "get_shared_exposure",
       EXPOSURE_TOOL_DESCRIPTION,
       EXPOSURE_INPUT_SHAPE,
-      paidSignal(async ({ asset = "USDC", positions }) => {
+      paidAnalytics(async ({ asset = "USDC", positions }) => {
         // Mesmo validador do REST — input de robô é não-confiável do mesmo
         // jeito, e um protocolo escrito errado que passasse em silêncio faria o
         // relatório ignorar parte da carteira sem dizer que ignorou.

@@ -61,11 +61,14 @@ describe("buildOpenApi", () => {
     expect(positions.required).toBe(true);
   });
 
-  it("oferece o parâmetro de teste grátis em toda rota", () => {
+  // Regressão da degustação removida em 2026-08-10: anunciar um atalho grátis
+  // aqui o entrega ao varredor automático, que é justamente quem lê este
+  // documento — e foi assim que 125 respostas saíram para 26 pagamentos.
+  it("não anuncia nenhum parâmetro de acesso gratuito", () => {
     const doc = buildOpenApi(BASE, routes, PAY_TO) as any;
     for (const path of Object.keys(doc.paths)) {
       const nomes = (doc.paths[path].get.parameters as { name: string }[]).map((p) => p.name);
-      expect(nomes).toContain("trial");
+      expect(nomes).not.toContain("trial");
     }
   });
 

@@ -252,21 +252,38 @@ describe("teto diário de eventos (protege a cota compartilhada)", () => {
     expect(commands[0][2]).toBe("_events");
   });
 
-  it("para de gastar comandos depois de estourar o teto, até virar o dia", async () => {
+  it("para de gastar comandos com RUÍDO depois de estourar o teto, até virar o dia", async () => {
     // Primeira gravação já devolve contador no teto (3) -> marca estourado.
     const fetchImpl = vi.fn(async () => okResponse([3, 1, 1, 1, 1, 1])) as unknown as FetchLike;
     const now = new Date("2026-07-29T10:00:00Z");
     await recordUsage({ kind: "challenged" }, { fetchImpl, env, now });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    // Eventos seguintes no MESMO dia não fazem request nenhum.
+    // Varredura seguinte no MESMO dia não faz request nenhum.
     await recordUsage({ kind: "challenged" }, { fetchImpl, env, now });
-    await recordUsage({ kind: "served" }, { fetchImpl, env, now });
+    await recordUsage({ kind: "not_found" }, { fetchImpl, env, now });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    // Dia seguinte volta a gravar.
-    await recordUsage({ kind: "served" }, { fetchImpl, env, now: new Date("2026-07-30T10:00:00Z") });
+    // Dia seguinte volta a gravar tudo.
+    await recordUsage({ kind: "challenged" }, { fetchImpl, env, now: new Date("2026-07-30T10:00:00Z") });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  // Regressão de 10/08/2026: com o teto valendo pra todo mundo, o ruído de
+  // varredura (~700/dia contra teto de 800) enchia o orçamento antes do meio do
+  // dia e o funil registrava `settled: 1` para 17 liquidações reais — apagando
+  // justamente as linhas que dizem se o serviço vende.
+  it("etapas de venda continuam gravando mesmo com o teto estourado", async () => {
+    const fetchImpl = vi.fn(async () => okResponse([3, 1, 1, 1, 1, 1])) as unknown as FetchLike;
+    const now = new Date("2026-07-29T10:00:00Z");
+    await recordUsage({ kind: "challenged" }, { fetchImpl, env, now });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    await recordUsage({ kind: "paid_attempt" }, { fetchImpl, env, now });
+    await recordUsage({ kind: "served" }, { fetchImpl, env, now });
+    await recordUsage({ kind: "settled" }, { fetchImpl, env, now });
+    await recordUsage({ kind: "failed" }, { fetchImpl, env, now });
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
   it("abaixo do teto não pausa nada", async () => {

@@ -30,7 +30,6 @@ import type { AssetId, LendingAssetId } from "./market-data/types.js";
 import { FLAGSHIP_ASSET } from "./market-data/types.js";
 import { cachedWithTtl } from "./market-data/cache.js";
 import { createMcpRequestHandler } from "./mcp.js";
-import { consumeFreeTrial } from "./freeTrial.js";
 import { renderLandingPage } from "./landingPage.js";
 import { logger } from "./notify/logger.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
@@ -360,25 +359,36 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
           extensions: BAZAAR_DECISION,
         },
       ]),
-      // Durabilidade e capacidade entram no preço BASE (PRICE_USD), não no
-      // premium da decisão: são produtos novos, sem track record próprio ainda.
-      // Cobrar preço de decisão por algo que ninguém comprou nem verificou
-      // inverteria a ordem — primeiro o histórico verificável, depois o preço.
+      // As 4 analíticas têm preço PRÓPRIO (ANALYTICS_PRICE_USD), entre o sinal
+      // cru e a decisão. Nasceram no preço base por não terem track record
+      // próprio; a ordem "primeiro o histórico verificável, depois o preço" foi
+      // cumprida — a sensibilidade é atestada on-chain desde 2026-08-06 e as
+      // quatro derivam de medição que nenhuma outra fonte pública oferece. O
+      // sinal cru fica no preço menor porque é o único que compete com dado
+      // grátis (DefiLlama); as analíticas não competem com nada.
       ...(Object.keys(DURABILITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${DURABILITY_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.durability[asset] },
+        { price: env.ANALYTICS_PRICE_USD, description: FINAL_DESCRIPTIONS.durability[asset] },
       ]),
       ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${CAPACITY_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.capacity[asset], extensions: BAZAAR_CAPACITY },
+        {
+          price: env.ANALYTICS_PRICE_USD,
+          description: FINAL_DESCRIPTIONS.capacity[asset],
+          extensions: BAZAAR_CAPACITY,
+        },
       ]),
       ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${SENSITIVITY_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.sensitivity[asset] },
+        { price: env.ANALYTICS_PRICE_USD, description: FINAL_DESCRIPTIONS.sensitivity[asset] },
       ]),
       ...(Object.keys(EXPOSURE_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${EXPOSURE_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.exposure[asset], extensions: BAZAAR_EXPOSURE },
+        {
+          price: env.ANALYTICS_PRICE_USD,
+          description: FINAL_DESCRIPTIONS.exposure[asset],
+          extensions: BAZAAR_EXPOSURE,
+        },
       ]),
     ]),
   });
@@ -471,6 +481,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
           score: accuracy?.score ?? null,
           windowed: accuracy?.windowed ?? null,
           signalPrice: env.PRICE_USD,
+          analyticsPrice: env.ANALYTICS_PRICE_USD,
           decisionPrice: env.DECISION_PRICE_USD,
         }),
       );
@@ -480,12 +491,19 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       logger.error({ err }, "falha renderizando a página inicial com score — servindo versão sem score");
       res
         .type("html")
-        .send(renderLandingPage({ score: null, signalPrice: env.PRICE_USD, decisionPrice: env.DECISION_PRICE_USD }));
+        .send(
+          renderLandingPage({
+            score: null,
+            signalPrice: env.PRICE_USD,
+            analyticsPrice: env.ANALYTICS_PRICE_USD,
+            decisionPrice: env.DECISION_PRICE_USD,
+          }),
+        );
     }
   });
 
-  // Liveness barato pra monitoramento externo (cron-job.org) — sem pagamento
-  // e sem consumir cota de free trial do produto real.
+  // Liveness barato pra monitoramento externo (cron-job.org) — rota própria,
+  // fora do produto pago, pra um monitor de uptime não precisar de carteira.
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", asOf: new Date().toISOString() });
   });
@@ -978,12 +996,11 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     return computeSensitivity(asset, readings, curves);
   }
 
-  // Fato de uso — cobre TAMBÉM as chamadas grátis, que o hook de settlement
-  // (acima) nunca vê. É essa linha, não a de pagamento, que responde "isso
-  // está sendo usado?" antes mesmo de dar receita.
+  // Fato de uso, registrado na entrega. Toda chamada que chega aqui já pagou —
+  // não existe mais caminho gratuito (ver a nota sobre a degustação removida
+  // logo abaixo), então esta linha e a de liquidação devem bater.
   function logUsage(
     asset: AssetId,
-    freeTrial: boolean,
     channel:
       | "rest"
       | "rest-decision"
@@ -992,9 +1009,27 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       | "rest-sensitivity"
       | "rest-exposure" = "rest",
   ): void {
-    logger.info({ channel, asset, freeTrial }, "sinal servido");
+    logger.info({ channel, asset }, "sinal servido");
   }
 
+  /**
+   * DEGUSTAÇÃO GRATUITA REMOVIDA EM 2026-08-10 — não reintroduzir sem resolver
+   * os três problemas que a tornaram um vazamento aberto, não uma amostra:
+   *
+   * 1. O opt-in `?trial=1` era ANUNCIADO no `/openapi.json`, e o público que lê
+   *    documento de descoberta é exatamente o varredor automático — o mesmo que
+   *    a degustação não pretendia servir.
+   * 2. A cota era um `Map` em memória por instância serverless: cada cold start
+   *    devolvia 3 chamadas novas pro mesmo IP. Não havia teto de verdade.
+   * 3. Medido em 09/08/2026: 12 respostas de produto entregues no dia contra
+   *    ZERO pagamento on-chain. Na janela inteira do funil foram 125 entregas
+   *    para 26 pagamentos na história toda do serviço.
+   *
+   * O gate de descoberta que motivou o opt-in continua íntegro: uma sonda sem
+   * header de pagamento vê 402 (era esse o requisito do x402.fuchss.app), e
+   * agora QUALQUER request sem pagamento vê 402 — inclusive com `?trial=1`, que
+   * hoje é um parâmetro desconhecido e simplesmente ignorado.
+   */
   for (const asset of Object.keys(RESOURCE_PATHS) as AssetId[]) {
     app.get(
       RESOURCE_PATHS[asset],
@@ -1003,88 +1038,39 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // realmente tentam pagar. Sem isto o projeto só conseguia auditar receita
       // liquidada on-chain e ficava cego sobre demanda.
       usageEntryMiddleware("signal", asset),
-      // Cota gratuita de degustação, só sob opt-in explícito (?trial=1) — uma
-      // sonda de descoberta (x402scan, Bazaar, trust indexes) bate na URL sem
-      // esse parâmetro e precisa ver 402 na resposta pra classificar isso como
-      // endpoint x402; se o trial fosse concedido automaticamente na primeira
-      // request de qualquer IP novo (como era antes), a sonda via 200 e o
-      // serviço nunca aparecia em nenhum diretório (bug real, achado testando
-      // submissão no x402.fuchss.app — 2026-07-17).
-      (req, res, next) => {
-        if (req.query.trial !== "1") {
-          next();
-          return;
-        }
-        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-        if (consumeFreeTrial(ip)) {
-          res.setHeader("X-Free-Trial", "true");
-          logUsage(asset, true);
-          void respondWithSignal(res, asset);
-          return;
-        }
-        next();
-      },
       paymentMiddlewareFromHTTPServer(server),
       async (_req, res) => {
-        logUsage(asset, false);
+        logUsage(asset);
         await respondWithSignal(res, asset);
       },
     );
   }
 
-  // Rotas de DECISÃO (Camada 1) — mesmo padrão free-trial + pagamento das
-  // rotas de sinal, mas servindo a recomendação MOVE/HOLD. Query params
+  // Rotas de DECISÃO (Camada 1) — mesmo padrão de pagamento das rotas de sinal,
+  // mas servindo a recomendação MOVE/HOLD. Query params
   // (position/amountUsd/moveCostUsd/horizonDays) são lidos DENTRO do handler.
   for (const asset of Object.keys(DECISION_PATHS) as AssetId[]) {
     app.get(
       DECISION_PATHS[asset],
       usageEntryMiddleware("decision", asset),
-      (req, res, next) => {
-        if (req.query.trial !== "1") {
-          next();
-          return;
-        }
-        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-        if (consumeFreeTrial(ip)) {
-          res.setHeader("X-Free-Trial", "true");
-          logUsage(asset, true, "rest-decision");
-          void respondWithDecision(res, asset, req.query as Record<string, unknown>);
-          return;
-        }
-        next();
-      },
       paymentMiddlewareFromHTTPServer(server),
       async (req, res) => {
-        logUsage(asset, false, "rest-decision");
+        logUsage(asset, "rest-decision");
         await respondWithDecision(res, asset, req.query as Record<string, unknown>);
       },
     );
   }
 
-  // Rotas de DURABILIDADE e CAPACIDADE — mesmo padrão free-trial + pagamento
-  // das rotas acima. Registradas em loops separados porque CAPACITY_PATHS é
-  // indexado por LendingAssetId (não tem ETH_STAKING — ver a nota na constante).
+  // Rotas de DURABILIDADE e CAPACIDADE — mesmo padrão de pagamento das rotas
+  // acima. Registradas em loops separados porque CAPACITY_PATHS é indexado por
+  // LendingAssetId (não tem ETH_STAKING — ver a nota na constante).
   for (const asset of Object.keys(DURABILITY_PATHS) as LendingAssetId[]) {
     app.get(
       DURABILITY_PATHS[asset],
       usageEntryMiddleware("durability", asset),
-      (req, res, next) => {
-        if (req.query.trial !== "1") {
-          next();
-          return;
-        }
-        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-        if (consumeFreeTrial(ip)) {
-          res.setHeader("X-Free-Trial", "true");
-          logUsage(asset, true, "rest-durability");
-          void respondWithDerived(res, asset, "durability", (readings) => computeDurability(asset, readings));
-          return;
-        }
-        next();
-      },
       paymentMiddlewareFromHTTPServer(server),
       async (_req, res) => {
-        logUsage(asset, false, "rest-durability");
+        logUsage(asset, "rest-durability");
         await respondWithDerived(res, asset, "durability", (readings) => computeDurability(asset, readings));
       },
     );
@@ -1094,23 +1080,9 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     app.get(
       EXPOSURE_PATHS[asset],
       usageEntryMiddleware("exposure", asset),
-      (req, res, next) => {
-        if (req.query.trial !== "1") {
-          next();
-          return;
-        }
-        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-        if (consumeFreeTrial(ip)) {
-          res.setHeader("X-Free-Trial", "true");
-          logUsage(asset, true, "rest-exposure");
-          void respondWithExposure(res, asset, req.query as Record<string, unknown>);
-          return;
-        }
-        next();
-      },
       paymentMiddlewareFromHTTPServer(server),
       async (req, res) => {
-        logUsage(asset, false, "rest-exposure");
+        logUsage(asset, "rest-exposure");
         await respondWithExposure(res, asset, req.query as Record<string, unknown>);
       },
     );
@@ -1120,23 +1092,9 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     app.get(
       SENSITIVITY_PATHS[asset],
       usageEntryMiddleware("sensitivity", asset),
-      (req, res, next) => {
-        if (req.query.trial !== "1") {
-          next();
-          return;
-        }
-        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-        if (consumeFreeTrial(ip)) {
-          res.setHeader("X-Free-Trial", "true");
-          logUsage(asset, true, "rest-sensitivity");
-          void respondWithDerived(res, asset, "sensitivity", (readings) => deriveSensitivity(asset, readings));
-          return;
-        }
-        next();
-      },
       paymentMiddlewareFromHTTPServer(server),
       async (_req, res) => {
-        logUsage(asset, false, "rest-sensitivity");
+        logUsage(asset, "rest-sensitivity");
         await respondWithDerived(res, asset, "sensitivity", (readings) => deriveSensitivity(asset, readings));
       },
     );
@@ -1146,23 +1104,9 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     app.get(
       CAPACITY_PATHS[asset],
       usageEntryMiddleware("capacity", asset),
-      (req, res, next) => {
-        if (req.query.trial !== "1") {
-          next();
-          return;
-        }
-        const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-        if (consumeFreeTrial(ip)) {
-          res.setHeader("X-Free-Trial", "true");
-          logUsage(asset, true, "rest-capacity");
-          void respondWithCapacity(res, asset, req.query as Record<string, unknown>);
-          return;
-        }
-        next();
-      },
       paymentMiddlewareFromHTTPServer(server),
       async (req, res) => {
-        logUsage(asset, false, "rest-capacity");
+        logUsage(asset, "rest-capacity");
         await respondWithCapacity(res, asset, req.query as Record<string, unknown>);
       },
     );

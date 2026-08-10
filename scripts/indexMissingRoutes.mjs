@@ -45,10 +45,13 @@ console.log("pagando a partir de:", evmAddress);
   console.log(`custo: ${Number(evm.amount) / 1e6} USDC\n`);
 }
 
-// Aquece a função primeiro, de graça, pra que a chamada paga não caia num
-// cold start — que é a causa mais provável da falha anterior.
-console.log("aquecendo a função (chamada grátis)...");
-const aquece = await fetch(`${URL}?trial=1`);
+// Aquece a função primeiro pra que a chamada paga não caia num cold start —
+// que é a causa mais provável da falha anterior. A degustação gratuita não
+// existe mais (removida em 2026-08-10), então o aquecimento é o próprio 402:
+// ele já executa todo o boot do servidor — carteira, x402ResourceServer,
+// requisitos de pagamento — que é a parte lenta do cold start.
+console.log("aquecendo a função (desafio 402, sem pagar)...");
+const aquece = await fetch(URL);
 console.log("aquecimento:", aquece.status, "\n");
 
 const pagar = wrapFetchWithPayment(fetch, client);

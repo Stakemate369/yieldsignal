@@ -8,7 +8,7 @@ import { logger } from "../notify/logger.js";
  * 403 nesse escopo e a retenção da CLI é curta), então todo `logger.info` de
  * uso que este projeto já escrevia era efetivamente cego — o dono só conseguia
  * auditar o que foi PAGO, lendo `Transfer` de USDC on-chain. Sem os números de
- * 402 servido / trial / erro não há como saber se o problema é "ninguém chega"
+ * 402 servido / tentativa de pagamento / erro não há como saber se o problema é "ninguém chega"
  * ou "chega e não paga", que exigem ações opostas.
  *
  * Backend: qualquer Redis com API REST (Upstash, Vercel KV). A descoberta das
@@ -28,12 +28,10 @@ import { logger } from "../notify/logger.js";
 
 /** Etapas do funil. A ordem aqui é a ordem em que aparecem numa chamada real. */
 export type UsageKind =
-  /** 402 devolvido: chegou sem pagamento e sem trial (inclui sonda de descoberta). */
+  /** 402 devolvido: chegou sem pagamento (inclui sonda de descoberta). */
   | "challenged"
   /** Chegou COM header de pagamento — tentativa real de compra. */
   | "paid_attempt"
-  /** Consumiu uma chamada do free trial (?trial=1). */
-  | "trial"
   /** Resposta de produto entregue com sucesso. */
   | "served"
   /** Falha ao gerar o produto (leitura de taxa etc.) — 503. */
@@ -111,6 +109,32 @@ function maxEventsPerDay(env: NodeJS.ProcessEnv): number {
   const raw = Number(env.USAGE_MAX_EVENTS_PER_DAY);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_MAX_EVENTS_PER_DAY;
 }
+
+/**
+ * Etapas que o teto diário NUNCA pode engolir.
+ *
+ * O teto protege a cota de Redis compartilhada com o YieldPilot, e o volume que
+ * o ameaça é `challenged`/`not_found` — varredura automática, ilimitada e de
+ * valor de negócio zero. Mas o teto era aplicado a TODOS os eventos por igual,
+ * e como o ruído chega primeiro e enche o orçamento antes do meio do dia, quem
+ * era descartado na prática era sempre o evento raro do fim da fila.
+ *
+ * Medido em 10/08/2026, com o funil finalmente legível: `challenged` sozinho
+ * fazia ~700 eventos/dia contra um teto de 800, e o resultado era `settled: 1`
+ * registrado para 17 liquidações reais no período e `paid_attempt: 0` — ou
+ * seja, a telemetria apagava exatamente as três linhas que respondem "isso
+ * vende?". O ruído estava pagando a conta com o dinheiro do sinal.
+ *
+ * Estas etapas são raras por natureza (uma por venda) e não têm como estourar
+ * cota nenhuma: a dezenas por dia no pior cenário realista, custam menos de 1%
+ * do orçamento. Continuam gravando mesmo com o teto do dia atingido.
+ */
+const BUDGET_EXEMPT_KINDS: ReadonlySet<UsageKind> = new Set<UsageKind>([
+  "paid_attempt",
+  "served",
+  "settled",
+  "failed",
+]);
 
 /**
  * Marca, por instância, que o orçamento do dia estourou. Uma vez marcado, os
@@ -272,8 +296,10 @@ export async function recordUsage(event: UsageEvent, options: RecordOptions = {}
     }
     const key = dayKey(options.now ?? new Date());
 
-    // Orçamento estourado neste dia: não gasta nem o comando do contador.
-    if (budgetExhaustedForDay === key) {
+    // Orçamento estourado neste dia: não gasta nem o comando do contador —
+    // exceto pelas etapas isentas, que são raras e são o motivo de a
+    // instrumentação existir (ver BUDGET_EXEMPT_KINDS).
+    if (budgetExhaustedForDay === key && !BUDGET_EXEMPT_KINDS.has(event.kind)) {
       bumpMemory(fields);
       return false;
     }

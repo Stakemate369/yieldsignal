@@ -82,15 +82,25 @@ const schema = z.object({
   PRICE_USD: z
     .string()
     .regex(/^\$\d+(\.\d{1,6})?$/, 'PRICE_USD precisa seguir o formato "$0.01" (cifrão + valor decimal)')
-    .default("$0.01"),
+    .default("$0.10"),
+  // Preço das 4 rotas ANALÍTICAS (durability/capacity/sensitivity/exposure).
+  // Nasceram no preço base porque eram produto novo sem track record próprio;
+  // desde 2026-08-06 a sensibilidade é atestada on-chain e as quatro derivam de
+  // medição que nenhuma outra fonte publica (utilização, liquidez sacável,
+  // decomposição de incentivo, fator compartilhado). Preço próprio pra elas
+  // subirem sem arrastar o sinal cru, que compete com dado grátis da DefiLlama.
+  ANALYTICS_PRICE_USD: z
+    .string()
+    .regex(/^\$\d+(\.\d{1,6})?$/, 'ANALYTICS_PRICE_USD precisa seguir o formato "$0.25" (cifrão + valor decimal)')
+    .default("$0.25"),
   // Preço das rotas de DECISÃO (Camada 1 premium) — a decisão MOVE/HOLD vale
   // mais que o dado bruto, então cobra mais que PRICE_USD por padrão. Mesmo
   // formato "Money" do x402. Aplicado tanto nas rotas REST /decision/* quanto
   // na tool MCP get_yield_decision.
   DECISION_PRICE_USD: z
     .string()
-    .regex(/^\$\d+(\.\d{1,6})?$/, 'DECISION_PRICE_USD precisa seguir o formato "$0.05" (cifrão + valor decimal)')
-    .default("$0.05"),
+    .regex(/^\$\d+(\.\d{1,6})?$/, 'DECISION_PRICE_USD precisa seguir o formato "$0.50" (cifrão + valor decimal)')
+    .default("$0.50"),
   // Alerta operacional opcional pro dono (mesmo padrão do YieldPilot). Ambos
   // vazios = notificação desligada (no-op silencioso, ver notify/telegram.ts);
   // o resto do produto funciona normalmente sem isso. Usado hoje pra avisar

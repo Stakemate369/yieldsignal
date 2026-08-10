@@ -52,11 +52,12 @@ Every REST and MCP response is signed as typed data, and the signed struct inclu
 summary would let the server sign one thing and serve another.
 
 ```bash
-# 402 challenge (no payment, no free trial) — this is what a discovery probe sees
+# 402 challenge — this is what a discovery probe sees, and what EVERY unpaid
+# request sees: there is no free tier and no bypass parameter.
 curl -i https://yieldsignal.vercel.app/signal/eth-staking-yield
 
-# free trial call, with the signature headers
-curl -sD /tmp/h "https://yieldsignal.vercel.app/signal/eth-staking-yield?trial=1" -o /tmp/b
+# paid call, with the signature headers (any x402 client settles the 402 for you)
+curl -sD /tmp/h https://yieldsignal.vercel.app/signal/eth-staking-yield -o /tmp/b
 grep -i '^x-signal-' /tmp/h
 ```
 
@@ -163,10 +164,15 @@ Everything above is MIT-licensed and reproducible from the repo:
 
 Four things that cost real time to discover:
 
-1. **A free trial granted automatically breaks discovery.** x402 crawlers classify an endpoint by
-   seeing a `402`. When the first call from any new IP silently succeeded, the service was invisible
-   to every directory. The trial now requires explicit opt-in (`?trial=1`) and a bare request always
-   challenges.
+1. **A free trial is a leak, not a sample — it was removed on 2026-08-10.** First it broke
+   discovery: x402 crawlers classify an endpoint by seeing a `402`, so while the first call from any
+   new IP silently succeeded, the service was invisible to every directory. Moving it behind an
+   explicit `?trial=1` fixed discovery and created a worse problem — the opt-in was advertised in
+   `/openapi.json`, and the audience that reads discovery documents *is* the automated crawler. With
+   the quota held in per-instance memory (3 calls per IP, reset on every cold start) there was no
+   real ceiling: 125 product responses were served against 26 payments in the service's entire
+   history, and on 2026-08-09 alone 12 responses went out with zero on-chain settlement. Every
+   product route is now paid, with no bypass parameter.
 2. **Sign the exact bytes you send.** Re-serializing the object for the signature (`res.json()` on
    one path, `JSON.stringify` on the other) produces a `contentHash` mismatch that only shows up in
    a buyer's verifier, not in your tests.

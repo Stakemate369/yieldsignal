@@ -75,7 +75,7 @@ describe("rankAssetsByAccuracy", () => {
 });
 
 describe("renderLandingPage", () => {
-  const params = { signalPrice: "$0.01", decisionPrice: "$0.05" };
+  const params = { signalPrice: "$0.01", analyticsPrice: "$0.25", decisionPrice: "$0.05" };
 
   it("renderiza a tabela com os números vindos do score, não hardcoded", () => {
     const html = renderLandingPage({
@@ -93,7 +93,7 @@ describe("renderLandingPage", () => {
   });
 
   it("usa os preços recebidos (sem preço escrito à mão que desatualiza)", () => {
-    const html = renderLandingPage({ score: null, signalPrice: "$0.02", decisionPrice: "$0.10" });
+    const html = renderLandingPage({ score: null, signalPrice: "$0.02", analyticsPrice: "$0.25", decisionPrice: "$0.10" });
     expect(html).toContain("$0.02/call signal");
     expect(html).toContain("$0.10/call decision");
   });
@@ -165,6 +165,7 @@ describe("renderLandingPage — escape de HTML", () => {
     const hostil = breakdown({ asset: "<img src=x onerror=alert(1)>" as never, withinToleranceRate: 0.5 });
     const html = renderLandingPage({
       signalPrice: "$0.01",
+      analyticsPrice: "$0.25",
       decisionPrice: "$0.05",
       score: score([hostil]),
     });

@@ -65,26 +65,21 @@ export function buildOpenApi(baseUrl: string, routes: DiscoveryRoute[], payTo: s
         summary: route.description.split(".")[0],
         description: route.description,
         operationId: route.path.replace(/[^a-zA-Z0-9]/g, "_").replace(/^_/, ""),
-        parameters: [
-          ...route.params.map((p) => ({
-            name: p.name,
-            in: "query",
-            required: p.required,
-            schema: { type: p.type },
-            description: p.description,
-          })),
-          {
-            name: "trial",
-            in: "query",
-            required: false,
-            schema: { type: "string", enum: ["1"] },
-            description: "Opt in to one of 3 free calls per IP per day instead of paying. A bare request always challenges with 402.",
-          },
-        ],
+        // Só os parâmetros REAIS da rota. O antigo `trial` foi retirado em
+        // 2026-08-10 junto com a degustação gratuita: anunciar um atalho grátis
+        // no documento de descoberta o entrega justamente ao varredor
+        // automático, que é quem lê este arquivo (ver a nota em expressApp.ts).
+        parameters: route.params.map((p) => ({
+          name: p.name,
+          in: "query",
+          required: p.required,
+          schema: { type: p.type },
+          description: p.description,
+        })),
         responses: {
           "200": {
             description:
-              "Paid (or free-trial) response. Signed as EIP-712 typed data by the payTo address; see the X-Signal-Signature, X-Signal-Signer and X-Signal-Eip712-Payload headers.",
+              "Paid response. Signed as EIP-712 typed data by the payTo address; see the X-Signal-Signature, X-Signal-Signer and X-Signal-Eip712-Payload headers.",
             content: { "application/json": { schema: { type: "object" } } },
           },
           "402": {

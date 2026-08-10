@@ -12,15 +12,17 @@ import { recordUsage, type UsageKind, type UsageRoute } from "./usageStore.js";
  * em serverless, porque registrar depois da resposta significa registrar numa
  * promise solta que a plataforma pode congelar antes de completar.
  *
+ * Desde a remoção da degustação gratuita (2026-08-10) só existem dois estados:
+ * tentou pagar ou não tentou. `?trial=1` virou parâmetro desconhecido e conta
+ * como `challenged`, igual a qualquer outra request sem pagamento.
+ *
  * Imprecisão conhecida e aceita: um header de pagamento presente mas inválido
  * conta como `paid_attempt` (não como `challenged`), embora a resposta acabe
  * sendo 402. É o comportamento desejável pra este uso — "alguém tentou pagar"
  * é informação melhor que "levou 402".
  */
-export function classifyIncoming(params: { paymentHeader: unknown; trialParam: unknown }): UsageKind {
-  if (params.paymentHeader) return "paid_attempt";
-  if (params.trialParam === "1") return "trial";
-  return "challenged";
+export function classifyIncoming(params: { paymentHeader: unknown }): UsageKind {
+  return params.paymentHeader ? "paid_attempt" : "challenged";
 }
 
 /**
@@ -36,7 +38,7 @@ export function usageEntryMiddleware(route: UsageRoute, asset: string) {
     // `recordUsage` já promete nunca lançar, mas a request não pode depender
     // dessa promessa pra chegar no próximo handler.
     try {
-      const kind = classifyIncoming({ paymentHeader: req.headers["x-payment"], trialParam: req.query.trial });
+      const kind = classifyIncoming({ paymentHeader: req.headers["x-payment"] });
       await recordUsage({ kind, route, channel: "rest", asset });
     } catch {
       // Telemetria nunca bloqueia o produto — segue pro handler real.

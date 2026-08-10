@@ -27,6 +27,8 @@ export interface LandingPageParams {
    */
   windowed?: WindowedAccuracy | null;
   signalPrice: string;
+  /** Preço das 4 rotas analíticas — próprio desde 2026-08-10 (ver config/env.ts). */
+  analyticsPrice: string;
   decisionPrice: string;
 }
 
@@ -139,7 +141,7 @@ function accuracySection(score: AccuracyScore | null, windowed?: WindowedAccurac
 }
 
 export function renderLandingPage(params: LandingPageParams): string {
-  const { score, windowed, signalPrice, decisionPrice } = params;
+  const { score, windowed, signalPrice, analyticsPrice, decisionPrice } = params;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -167,7 +169,7 @@ export function renderLandingPage(params: LandingPageParams): string {
 <h1>YieldSignal</h1>
 <p class="sub">Risk-weighted yield signals for autonomous agents, paid per call via <a href="https://x402.org">x402</a> — no API key, no account. ETH liquid staking on Ethereum mainnet (Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether, Binance Staked ETH) plus USDC and WETH lending on Base (Aave, Compound, Morpho, Moonwell, Euler, Fluid).</p>
 
-<p><span class="badge">${signalPrice}/call signal</span><span class="badge">${decisionPrice}/call decision</span><span class="badge">3 free/day per IP via ?trial=1</span><span class="badge">signed + on-chain track record</span></p>
+<p><span class="badge">${signalPrice}/call signal</span><span class="badge">${analyticsPrice}/call analytics</span><span class="badge">${decisionPrice}/call decision</span><span class="badge">signed + on-chain track record</span></p>
 
 ${accuracySection(score, windowed)}
 
@@ -175,7 +177,7 @@ ${accuracySection(score, windowed)}
 <pre>GET https://yieldsignal.vercel.app${ASSET_ROUTES.ETH_STAKING}
 GET https://yieldsignal.vercel.app${ASSET_ROUTES.USDC}
 GET https://yieldsignal.vercel.app${ASSET_ROUTES.WETH}</pre>
-<p>Call it without payment and you'll get a <code>402 Payment Required</code> with the exact price/asset/network. Any x402-compatible client (e.g. <a href="https://www.npmjs.com/package/@x402/fetch">@x402/fetch</a>) completes the payment automatically. Add <code>?trial=1</code> to use one of the 3 free daily calls per IP instead of paying. Bare <code>/signal</code> and <code>/decision</code> redirect (308) to the ${ASSET_LABELS[FLAGSHIP_ASSET]} route.</p>
+<p>Call it without payment and you'll get a <code>402 Payment Required</code> with the exact price/asset/network. Any x402-compatible client (e.g. <a href="https://www.npmjs.com/package/@x402/fetch">@x402/fetch</a>) completes the payment automatically. Every product route is paid — there is no free tier. Bare <code>/signal</code> and <code>/decision</code> redirect (308) to the ${ASSET_LABELS[FLAGSHIP_ASSET]} route.</p>
 
 <h2>Decision, not just data</h2>
 <pre>GET /decision/eth-staking-yield?position=lido&amp;amountUsd=25000&amp;horizonDays=30</pre>

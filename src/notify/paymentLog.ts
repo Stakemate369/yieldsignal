@@ -67,7 +67,7 @@ export function alertOnExternalPayer(context: SettleResultContext, channel: Paym
  * pode ter comprado tanto o sinal de USDC quanto o de WETH). `resourceUrl`
  * vem de `paymentPayload.resource?.url`, populado pelo próprio
  * x402HTTPResourceServer a partir da rota que gerou o 402 original — best
- * effort (mesmo espírito não-garantido do freeTrial.ts), útil pra saber qual
+ * effort — não é garantia rígida, mas é útil pra saber qual
  * endpoint foi pago sem precisar de um mecanismo novo de correlação.
  *
  * Registrada via `onAfterSettle` em DUAS instâncias de x402ResourceServer

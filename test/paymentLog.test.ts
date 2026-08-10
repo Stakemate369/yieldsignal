@@ -105,4 +105,33 @@ describe("alerta de pagador externo (venda real)", () => {
     logSettledPayment(context({ result: { success: true, payer: "0xStranger000000000000000000000000000000aa", transaction: "0xtx", network: "eip155:8453", amount: "50000" } }), "rest");
     expect(telegramMock).not.toHaveBeenCalled();
   });
+
+  // Regressão de 2026-08-10: a carteira pessoal do dono (destino de
+  // `npm run withdraw`) pagou uma chamada em 16/07 e ficou contada como venda
+  // externa por 25 dias, inflando a única métrica que responde "alguém além de
+  // mim compra?". Agora entra na lista automaticamente.
+  it("NÃO alerta quando o payer é a OWNER_WALLET_ADDRESS (entra na lista sozinha)", async () => {
+    process.env.OWNER_WALLET_ADDRESS = "0xFb89d540deC44Ee1f0B6C0749F6e0C922E5d65f6";
+    vi.resetModules();
+    vi.doMock("../src/notify/logger.js", () => ({ logger: { info: infoMock, warn: warnMock, error: vi.fn() } }));
+    vi.doMock("../src/notify/telegram.js", () => ({ sendTelegramAlert: telegramMock }));
+    ({ logSettledPayment } = await import("../src/notify/paymentLog.js"));
+    logSettledPayment(context({ result: { success: true, payer: "0xfb89d540dec44ee1f0b6c0749f6e0c922e5d65f6", transaction: "0xtx", network: "eip155:8453", amount: "10000" } }), "rest");
+    expect(telegramMock).not.toHaveBeenCalled();
+    delete process.env.OWNER_WALLET_ADDRESS;
+  });
+
+  // Guarda contra um jeito plausível de escrever a correção acima e errar: se
+  // OWNER_WALLET_ADDRESS estiver vazia, uma string vazia não pode virar membro
+  // do conjunto — senão um payer ausente/vazio passaria a contar como próprio.
+  it("OWNER_WALLET_ADDRESS vazia não transforma payer desconhecido em próprio", async () => {
+    process.env.OWNER_WALLET_ADDRESS = "";
+    vi.resetModules();
+    vi.doMock("../src/notify/logger.js", () => ({ logger: { info: infoMock, warn: warnMock, error: vi.fn() } }));
+    vi.doMock("../src/notify/telegram.js", () => ({ sendTelegramAlert: telegramMock }));
+    ({ logSettledPayment } = await import("../src/notify/paymentLog.js"));
+    logSettledPayment(context({ result: { success: true, payer: "0xdesconhecido", transaction: "0xtx", network: "eip155:8453", amount: "10000" } }), "rest");
+    expect(telegramMock).toHaveBeenCalledTimes(1);
+    delete process.env.OWNER_WALLET_ADDRESS;
+  });
 });

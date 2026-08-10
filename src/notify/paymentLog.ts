@@ -12,12 +12,28 @@ export type PaymentChannel = "rest" | "mcp";
 // liquidação já feita, e não precisa da validação completa do schema.
 const DEFAULT_SELF_PAYERS = ["0xC2432775f205333D15eCAe61d56cD7Fe1F6C3c15"];
 
+/**
+ * `OWNER_WALLET_ADDRESS` entra na lista AUTOMATICAMENTE. É a carteira pessoal
+ * do dono — o destino de `npm run withdraw` —, então por definição um pagamento
+ * vindo dela não é venda a terceiro.
+ *
+ * Bug real, achado em 2026-08-10 conferindo saldos: essa carteira pagou uma
+ * chamada em 16/07/2026 e ficou contada como PAGADOR EXTERNO desde então, tanto
+ * no alerta de Telegram quanto no `external: true` do registro durável de
+ * vendas. Inflava em uma unidade a única métrica que o projeto usa pra dizer se
+ * alguém além do dono compra — e inflava de forma permanente, porque o registro
+ * já foi gravado. Derivar do env em vez de exigir que alguém lembre de repetir
+ * o endereço em SELF_PAYER_ADDRESSES fecha a classe inteira do erro.
+ */
 function selfPayerSet(): Set<string> {
   const fromEnv = (process.env.SELF_PAYER_ADDRESSES ?? "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0);
-  return new Set([...DEFAULT_SELF_PAYERS.map((a) => a.toLowerCase()), ...fromEnv]);
+  const owner = (process.env.OWNER_WALLET_ADDRESS ?? "").trim().toLowerCase();
+  return new Set(
+    [...DEFAULT_SELF_PAYERS.map((a) => a.toLowerCase()), ...fromEnv, owner].filter((a) => a.length > 0),
+  );
 }
 
 /** Um pagamento vindo de carteira do próprio dono não é venda. Exportado pra reuso no registro durável. */

@@ -18,7 +18,16 @@ npm run attest               # publica UMA atestação on-chain do sinal atual (
 npm run register-agent      # mint único de identidade ERC-8004 (mainnet, gasta gas real) — pede "CONFIRM"
 npm run bazaar:check        # compara o preço anunciado no índice do Bazaar com o que cada rota cobra hoje — não gasta nada
 npm run bazaar:sync         # paga UMA chamada real em cada rota divergente pra reescrever o preço no índice (gasta USDC da carteira compradora)
+npm run fund-buyer -- 1.50  # devolve USDC da receptora pra compradora, pra manutenção nunca precisar de aporte externo
 ```
+
+### Manutenção paga é um CICLO FECHADO — nunca peça aporte novo
+
+As chamadas de `bazaar:sync` saem da carteira COMPRADORA e caem na RECEPTORA, as duas do dono: o dinheiro troca de bolso, não é gasto. Quando a compradora seca, o valor está na receptora — a resposta certa é `npm run fund-buyer`, não pedir depósito. Só existe custo real se a receptora também estiver vazia.
+
+`bazaar:sync` é IDEMPOTENTE por `state/bazaar-sync.json` (gitignorado, carência de 12h). Isso não é otimização: o Bazaar leva horas pra refletir uma liquidação, então uma segunda execução relê o índice, ainda vê o preço antigo e conclui que a rota continua fora de sincronia. Sem a trava, rodar duas vezes no mesmo dia paga tudo de novo — aconteceu em 2026-08-10 e secou a carteira antes de chegar nas rotas que faltavam. O marcador é gravado a cada sucesso, não no fim do laço, pra que morrer no meio não vire pagamento repetido.
+
+`/exposure/*` exige `?positions=`; chamar a URL nua gasta o pagamento e devolve 400, porque o middleware x402 liquida ANTES do handler rodar. Rota com parâmetro obrigatório precisa entrar em `PARAMETROS_OBRIGATORIOS` no script.
 
 ### O índice do Bazaar é EMPURRADO por venda, não consultado
 

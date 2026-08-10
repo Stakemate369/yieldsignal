@@ -24,12 +24,68 @@
 // gas do EIP-3009 é pago pelo facilitador. O custo líquido é zero; o que limita
 // é o saldo da compradora no momento da chamada.
 import "dotenv/config";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { CdpX402Client } from "@coinbase/cdp-sdk/x402";
 import { wrapFetchWithPayment } from "@x402/fetch";
+
+/**
+ * Memória local de "já paguei esta rota, o índice é que ainda não atualizou".
+ *
+ * O Bazaar leva horas pra refletir uma liquidação. Sem esta trava, rodar o
+ * script duas vezes no mesmo dia paga TUDO DE NOVO: a segunda execução relê o
+ * índice, encontra o preço velho (que ainda não mudou) e conclui que a rota
+ * continua fora de sincronia. Erro real e caro, cometido em 2026-08-10 — a
+ * segunda execução regastou em rotas que a primeira já tinha corrigido e secou
+ * a carteira antes de chegar nas que faltavam.
+ *
+ * `state/*.json` é gitignorado (ver .gitignore), então isto não versiona nada.
+ */
+const ARQUIVO_ESTADO = new URL("../state/bazaar-sync.json", import.meta.url);
+const CARENCIA_HORAS = 12;
+
+function lerEstado() {
+  try {
+    return JSON.parse(readFileSync(ARQUIVO_ESTADO, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function gravarEstado(estado) {
+  try {
+    mkdirSync(new URL("../state/", import.meta.url), { recursive: true });
+    writeFileSync(ARQUIVO_ESTADO, JSON.stringify(estado, null, 2) + "\n");
+  } catch (err) {
+    // Perder a memória degrada pra "paga de novo", não pra travar o script.
+    console.error(`aviso: não consegui gravar ${ARQUIVO_ESTADO.pathname}: ${err?.message ?? err}`);
+  }
+}
+
+const horasDesde = (iso) => (Date.now() - new Date(iso).getTime()) / 3_600_000;
 
 const BASE = "https://yieldsignal.vercel.app";
 const BAZAAR = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 const PAGAR = process.argv.includes("--pagar");
+
+/**
+ * Rotas que EXIGEM parâmetro pra responder 200. `/exposure/*` recebe as
+ * posições do comprador e recusa entrada ausente com 400 (ver
+ * signal/parsePositions.ts — recusar é proposital, "não atribuído" em silêncio
+ * seria pior). Chamar a URL nua aqui gastava o pagamento e levava 400: o
+ * middleware x402 liquida ANTES do handler rodar, então o dinheiro sai e a
+ * resposta é erro. Aconteceu de verdade em 2026-08-10, nas duas rotas de
+ * exposure, na primeira execução deste script.
+ *
+ * O valor é só um exemplo válido — o que interessa é a liquidação, que é o que
+ * reescreve a entrada do índice. O Bazaar indexa o path sem query string, então
+ * pagar com parâmetro atualiza a mesma entrada.
+ */
+const PARAMETROS_OBRIGATORIOS = {
+  "/exposure/usdc-base-yield": "?positions=aave:100000,morpho:50000",
+  "/exposure/weth-base-yield": "?positions=aave:100000",
+};
+
+const comParametros = (rota) => rota + (PARAMETROS_OBRIGATORIOS[rota] ?? "");
 
 /** Preço que a rota cobra AGORA, lido do desafio 402 (fonte da verdade). */
 async function precoAtual(rota) {
@@ -93,32 +149,57 @@ for (const l of linhas.sort((a, b) => a.rota.localeCompare(b.rota))) {
   console.log(`${l.rota.padEnd(30)} índice ${usd(l.indexado).padStart(7)}  real ${usd(l.atual).padStart(7)}  ${marca}`);
 }
 
-const desatualizadas = linhas.filter((l) => l.divergente);
+const estado = lerEstado();
+const divergentes = linhas.filter((l) => l.divergente);
+
+// Separa "o índice está velho porque ninguém pagou" de "eu já paguei e o índice
+// ainda não propagou". As duas parecem idênticas na leitura do Bazaar.
+const aguardando = divergentes.filter((l) => estado[l.rota] && horasDesde(estado[l.rota]) < CARENCIA_HORAS);
+const desatualizadas = divergentes.filter((l) => !aguardando.includes(l));
+
 const custo = desatualizadas.reduce((s, l) => s + l.atual, 0);
-console.log(`\n${desatualizadas.length} rota(s) fora de sincronia — custo para corrigir: ${usd(custo)}`);
+if (aguardando.length > 0) {
+  console.log(`\n${aguardando.length} rota(s) já paga(s) nas últimas ${CARENCIA_HORAS}h — aguardando o índice propagar:`);
+  for (const l of aguardando) console.log(`  ${l.rota.padEnd(30)} pago há ${horasDesde(estado[l.rota]).toFixed(1)}h`);
+}
+console.log(`\n${desatualizadas.length} rota(s) a corrigir — custo: ${usd(custo)}`);
 
 if (!PAGAR) {
   console.log("\nNada foi pago. Rode com --pagar para corrigir.");
   process.exit(0);
 }
-if (desatualizadas.length === 0) process.exit(0);
+if (desatualizadas.length === 0) {
+  console.log("Nada a fazer.");
+  process.exit(0);
+}
 
-const cliente = await CdpX402Client.create();
-const conta = await cliente.getAccount();
-console.log(`\npagando a partir de ${conta.address}\n`);
+// Mesma construção de `indexMissingRoutes.mjs`: `new CdpX402Client()` +
+// `getAddresses()`. Não existe `CdpX402Client.create()` neste SDK.
+const cliente = new CdpX402Client();
+const { evmAddress } = await cliente.getAddresses();
+console.log(`\npagando a partir de ${evmAddress}\n`);
 
 const pagar = wrapFetchWithPayment(fetch, cliente);
 let ok = 0;
 for (const l of desatualizadas) {
+  const alvo = BASE + comParametros(l.rota);
   process.stdout.write(`${l.rota.padEnd(30)} ${usd(l.atual)} ... `);
   try {
     // Aquece com o próprio 402: em cold start a verificação com o facilitador
     // estoura o tempo e o pagamento falha sem debitar (ver indexMissingRoutes.mjs).
-    await fetch(BASE + l.rota);
-    const res = await pagar(BASE + l.rota);
+    await fetch(alvo);
+    const res = await pagar(alvo);
     if (res.status === 200) {
       ok++;
+      // Grava a cada sucesso, não no fim: se a carteira secar no meio da fila e
+      // o processo morrer, o que já foi pago não pode ser pago de novo.
+      estado[l.rota] = new Date().toISOString();
+      gravarEstado(estado);
       console.log("PAGO");
+    } else if (res.status === 402) {
+      // 402 depois de tentar pagar quase sempre é saldo insuficiente na
+      // compradora — o cliente não consegue assinar autorização que não cobre.
+      console.log("recusado (402) — provável saldo insuficiente; recarregue a carteira compradora");
     } else {
       console.log(`recusado (HTTP ${res.status})`);
     }

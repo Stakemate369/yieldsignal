@@ -75,7 +75,7 @@ describe("rankAssetsByAccuracy", () => {
 });
 
 describe("renderLandingPage", () => {
-  const params = { signalPrice: "$0.01", analyticsPrice: "$0.25", decisionPrice: "$0.05" };
+  const params = { signalPrice: "$0.01", analyticsPrice: "$0.25", decisionPrice: "$0.05", persistencePrice: "$1.00" };
 
   it("renderiza a tabela com os números vindos do score, não hardcoded", () => {
     const html = renderLandingPage({
@@ -93,7 +93,7 @@ describe("renderLandingPage", () => {
   });
 
   it("usa os preços recebidos (sem preço escrito à mão que desatualiza)", () => {
-    const html = renderLandingPage({ score: null, signalPrice: "$0.02", analyticsPrice: "$0.25", decisionPrice: "$0.10" });
+    const html = renderLandingPage({ score: null, signalPrice: "$0.02", analyticsPrice: "$0.25", decisionPrice: "$0.10", persistencePrice: "$1.00" });
     expect(html).toContain("$0.02/call signal");
     expect(html).toContain("$0.10/call decision");
   });
@@ -166,7 +166,7 @@ describe("renderLandingPage — escape de HTML", () => {
     const html = renderLandingPage({
       signalPrice: "$0.01",
       analyticsPrice: "$0.25",
-      decisionPrice: "$0.05",
+      decisionPrice: "$0.05", persistencePrice: "$1.00",
       score: score([hostil]),
     });
     expect(html).not.toContain("<img src=x");

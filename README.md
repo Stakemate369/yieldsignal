@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml/badge.svg)](https://github.com/Stakemate369/yieldsignal/actions/workflows/ci.yml)
 
-Risk-weighted yield signals for autonomous agents, paid per call via the [x402](https://x402.org) protocol — no API key, no signup. Every product route is paid: **$0.10** signal, **$0.25** analytics (durability/capacity/sensitivity/exposure), **$0.50** decision. There is no free tier and no bypass parameter.
+Risk-weighted yield signals for autonomous agents, paid per call via the [x402](https://x402.org) protocol — no API key, no signup. Every product route is paid: **$0.10** signal, **$0.25** analytics (durability/capacity/sensitivity/exposure), **$0.50** decision, **$1.00** persistence. There is no free tier and no bypass parameter.
 
 - **ETH liquid staking** (Ethereum mainnet) across **Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether and Binance Staked ETH**
 - **USDC and WETH lending** (Base) across **Aave, Compound, Morpho, Moonwell, Euler and Fluid**
 
-Six products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), the **capacity** report (can you actually withdraw your size from that market), the **sensitivity** report (how close the market is to the kink where borrow rates explode), and the **exposure** report (how much of your portfolio sits behind the same risk, no matter how many venues it is spread across).
+Seven products: the raw **signal** (what pays best right now), the **decision** (given where your money already sits, is moving it worth the cost — MOVE/HOLD with expected net gain and break-even in days), the **durability** report (how much of that APY survives if incentives stop), the **capacity** report (can you actually withdraw your size from that market), the **sensitivity** report (how close the market is to the kink where borrow rates explode), the **exposure** report (how much of your portfolio sits behind the same risk, no matter how many venues it is spread across), and the **persistence** report (how long a call here actually holds before the leader flips — measured from this service's own on-chain attestations, which is why no competing feed can produce it).
 
 **Live:** `https://yieldsignal.vercel.app`
 
@@ -22,6 +22,7 @@ GET https://yieldsignal.vercel.app/durability/weth-base-yield
 GET https://yieldsignal.vercel.app/capacity/usdc-base-yield?amountUsd=200000
 GET https://yieldsignal.vercel.app/sensitivity/usdc-base-yield
 GET https://yieldsignal.vercel.app/exposure/usdc-base-yield?positions=aave:200000,morpho:150000
+GET https://yieldsignal.vercel.app/persistence/usdc-base-yield
 ```
 
 Bare `/signal` and `/decision` (no asset) redirect to the ETH staking route — the asset with the strongest verified track record. Short forms like `/signal/usdc` redirect to the canonical path.
@@ -154,6 +155,30 @@ Percentages are of *attributable* capital, not of the total — over the total t
 This measures **structural shared exposure** — the factual claim "these positions depend on the same thing" — not statistical correlation. Saying how much they move together would need a price history this service does not have, and would be a weaker claim dressed as a stronger one.
 
 **Recursive-collateral detection is deliberately absent.** Checked live across the 77 live Morpho markets on Base: zero cycles, and zero assets that are both collateral and loan asset. Worse, the recursion that killed Stream was not in the lending graph at all — it was in the *issuance* of the synthetic (xUSD backed by positions funded with the borrowed USDC). A cycle detector would have reported "all clear" throughout the collapse. False safety is worse than a false alarm.
+
+### How long does the answer hold? — `/persistence/*`
+
+```
+GET /persistence/usdc-base-yield
+```
+
+Every other endpoint here — and every competing yield feed — answers *what pays best now*. None answers **how long that stays true**, which is the number that decides whether moving capital is worth the gas.
+
+This one answers it from this service's own hourly attestations on Base. Over 24 days and 439 attestations, the three assets are not the same product at all:
+
+| Asset | Leadership changes | Median time on top | Worth chasing, per $10k, before gas |
+| --- | --- | --- | --- |
+| WETH lending | **0** | > 518h (floor, censored) | $6.50 |
+| ETH liquid staking | 10 | 26h | $0.018 |
+| USDC lending | **167** | 2h | **$0.011** |
+
+Half of those 167 USDC switches are a **round trip between the same two protocols** (`compound <-> fluid`). Following that signal literally costs more in gas than the edge is worth — and until this endpoint existed, nothing in the catalogue said so.
+
+It also settles, empirically, an assumption almost everyone makes: **a bigger lead does not last longer.** Spearman **-0.04** across 177 completed leadership spells, with the `0-24bps` and `>=300bps` bands both sitting at a 2h median. Gap size is not a usable proxy for confidence, and this is the only place that number is published — including when it is unflattering to the service publishing it.
+
+The `/decision/*` routes consume this internally: expected gain is projected over the horizon you asked for **or** the measured lead duration, whichever is shorter. A 30-day projection on a 2h edge is exactly how a MOVE that only pays gas gets recommended.
+
+Honest limits, stated in the payload rather than in a footnote: the observation interval is 1h, so leads shorter than that are invisible; assets whose lead has not yet changed report a **floor with a censoring flag**, never a median; and every figure travels with its sample size, with `null` wherever the sample is too small. Every input is a public attestation UID — recompute the whole report from [base.easscan.org](https://base.easscan.org) and you get the same numbers without trusting this server.
 
 ### How long is a signal good for?
 

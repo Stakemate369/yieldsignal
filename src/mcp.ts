@@ -22,6 +22,8 @@ import { collectExposureFactors } from "./market-data/exposureFactors.js";
 import { parsePositions } from "./signal/parsePositions.js";
 import { collectBorrowRateCurves } from "./market-data/rateCurve.js";
 import { logger } from "./notify/logger.js";
+import { loadPersistence } from "./attestation/attestationCache.js";
+import { leadHoursForDecision } from "./attestation/persistence.js";
 import { logSettledPayment, recordSettlementUsage } from "./notify/paymentLog.js";
 import { recordUsage } from "./usage/usageStore.js";
 import type { SignerAccount } from "./wallet/signerAccount.js";
@@ -82,6 +84,16 @@ const CAPACITY_INPUT_SHAPE = {
     .number()
     .optional()
     .describe("Position size in USD to test for exit. Omit to get utilization and free liquidity without an exit verdict."),
+};
+
+const PERSISTENCE_TOOL_DESCRIPTION =
+  "How long this service's own leadership calls actually hold, measured from its hourly on-chain attestations (EAS on Base). Returns the median duration a protocol stayed the best pick, survival rates at 6/24/72h, how much of the rotation is the same two protocols trading places, and what chasing the leader is worth per $10k before gas. Measured over 24 days: the WETH leader never changed once, the ETH staking leader changed every ~26h, the USDC leader every ~2h with half the switches being a round trip between the same pair — three assets sold at one price with wildly different reliability. Also answers, empirically, whether a wider lead lasts longer: it does not (Spearman -0.04 over 177 completed spells), so gap size is not a usable proxy for confidence. Every input is a public attestation UID: recompute it yourself from base.easscan.org and get the same number. Observed history with sample sizes attached, never a forecast — assets whose lead has not changed in the window are reported as a floor with a censoring flag, never as a median.";
+
+const PERSISTENCE_INPUT_SHAPE = {
+  asset: z
+    .enum(ASSET_IDS)
+    .optional()
+    .describe("Which market's leadership durability to measure: USDC/WETH lending on Base, or ETH_STAKING liquid staking. Defaults to USDC."),
 };
 
 const DECISION_INPUT_SHAPE = {
@@ -150,10 +162,17 @@ export async function createMcpRequestHandler(
     payTo: payToEvmAddress,
     price: env.DECISION_PRICE_USD,
   });
+  const persistenceAccepts = await resourceServer.buildPaymentRequirements({
+    scheme: "exact",
+    network,
+    payTo: payToEvmAddress,
+    price: env.PERSISTENCE_PRICE_USD,
+  });
 
   const paidSignal = createPaymentWrapper(resourceServer, { accepts: signalAccepts });
   const paidAnalytics = createPaymentWrapper(resourceServer, { accepts: analyticsAccepts });
   const paidDecision = createPaymentWrapper(resourceServer, { accepts: decisionAccepts });
+  const paidPersistence = createPaymentWrapper(resourceServer, { accepts: persistenceAccepts });
 
   // Fato de pagamento — resourceServer daqui é uma instância PRÓPRIA do canal
   // MCP (não a do endpoint REST, ver expressApp.ts), por isso o registro é
@@ -234,7 +253,17 @@ export async function createMcpRequestHandler(
         }
         try {
           const readings = await collectRates(asset);
-          const decision = decideMove(readings, parsed.input);
+          // Mesma histerese do canal REST: o ganho é projetado só enquanto a
+          // liderança historicamente durou. Canal diferente não pode devolver
+          // decisão diferente pelo mesmo preço. Best-effort — sem o histórico a
+          // decisão sai sem desconto e dizendo que saiu sem desconto.
+          let expectedLeadHours: number | null = null;
+          try {
+            expectedLeadHours = leadHoursForDecision(await loadPersistence(signer.address), asset);
+          } catch (err) {
+            logger.warn({ err, asset }, "sem persistência medida para a decisão (MCP) — seguindo sem desconto");
+          }
+          const decision = decideMove(readings, { ...parsed.input, expectedLeadHours });
           // Assina o SINAL embutido (mesmo contrato do REST /decision/*): a
           // decisão é função determinística do sinal + query params, então
           // assinar o sinal já torna a decisão verificável. Devolve o texto
@@ -392,6 +421,77 @@ export async function createMcpRequestHandler(
             ),
           ),
         );
+      }),
+    );
+
+    /**
+     * PERSISTÊNCIA — a única tool que não lê mercado nenhum. Fonte: o histórico
+     * atestado no EAS, pelo cache compartilhado com o canal REST.
+     *
+     * Não assina a resposta, e a diferença é a favor do comprador: as outras
+     * tools entregam uma leitura que só existe naquele instante, então a
+     * assinatura é o que prova de onde ela veio. Aqui TODA entrada é uma
+     * atestação pública e imutável — o comprador recomputa do EASScan e chega ao
+     * mesmo número sem precisar confiar nesta resposta. Reprodutibilidade é
+     * garantia mais forte que assinatura, então o bloco de verificação aponta
+     * pra fonte em vez de assinar por cima dela.
+     */
+    mcpServer.tool(
+      "get_leadership_persistence",
+      PERSISTENCE_TOOL_DESCRIPTION,
+      PERSISTENCE_INPUT_SHAPE,
+      paidPersistence(async ({ asset = "USDC" }) => {
+        try {
+          const report = await loadPersistence(signer.address);
+          const doAsset = report?.perAsset.find((a) => a.asset === asset) ?? null;
+          if (!report || !doAsset) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({ error: "no attestation history available for this asset yet" }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          const content = [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                asset,
+                basis: report.basis,
+                observedFrom: report.observedFrom,
+                observedTo: report.observedTo,
+                observedDays: report.observedDays,
+                attestationsInWindow: report.totalAttestations,
+                persistence: doAsset,
+                gapVsDuration: report.gapVsDuration,
+                appliedByDecisionToolAsLeadHours: doAsset.expectedLeadHours,
+                computedAt: report.computedAt,
+              }),
+            },
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                verification:
+                  "Every input to this report is a public EAS attestation on Base mainnet. Query schema " +
+                  "0xe74a27f6c216134a1a3aef4c26e29bd8866ac679a8023ddde34faa0bb05dd272 at base.easscan.org for this attester and recompute: same inputs, same numbers. No signature is needed because nothing here depends on trusting this server.",
+                attester: signer.address,
+                source: "https://base.easscan.org",
+              }),
+            },
+          ];
+          logger.info({ channel: "mcp-persistence", asset }, "persistência servida");
+          await recordUsage({ kind: "served", route: "persistence", channel: "mcp", asset });
+          return { content };
+        } catch (err) {
+          logger.error({ err, asset }, "falha gerando persistência (MCP)");
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ error: "falha temporária lendo o histórico atestado" }) }],
+            isError: true,
+          };
+        }
       }),
     );
 

@@ -255,3 +255,88 @@ describe("dependência de campanha e profundidade do destino", () => {
     expect(d.reason).not.toContain("dilutes the rate");
   });
 });
+
+/**
+ * HISTERESE — o ganho deixa de ser projetado no horizonte pedido e passa a ser
+ * projetado só enquanto a liderança do destino historicamente durou.
+ * Ver MoveDecisionInput.expectedLeadHours.
+ */
+describe("decideMove — histerese por persistência medida", () => {
+  // aave 800*1.0=800 lidera; comprador em compound 300*0.99=297. ganho=503bps.
+  // $200k * 503bps = $10.060/ano. Em 30 dias: ~$827 -> MOVE folgado.
+  // Em 2h (0,0833 dia): $2,30 -> não cobre um custo de $5.
+  const readings = [reading("aave", 800), reading("compound", 300)];
+  const posicao = { currentProtocol: "compound" as const, amountUsd: 200_000, moveCostUsd: 5, horizonDays: 30 };
+
+  it("sem persistência informada, mantém o comportamento anterior (horizonte inteiro)", () => {
+    const d = decideMove(readings, posicao);
+    expect(d.action).toBe("MOVE");
+    expect(d.effectiveHorizonDays).toBe(30);
+    expect(d.horizonLimitedByPersistence).toBe(false);
+    expect(d.expectedLeadHours).toBeNull();
+    // Silenciar sobre a ausência de medida deixaria parecer que ela foi feita.
+    expect(d.reason).toMatch(/no measured leadership durability/i);
+  });
+
+  it("liderança de 2h derruba um MOVE de $827 para HOLD — o caso real do USDC", () => {
+    const d = decideMove(readings, { ...posicao, expectedLeadHours: 2 });
+    expect(d.action).toBe("HOLD");
+    expect(d.effectiveHorizonDays).toBeCloseTo(2 / 24, 10);
+    expect(d.horizonLimitedByPersistence).toBe(true);
+    expect(d.expectedLeadHours).toBe(2);
+    expect(d.expectedNetGainUsd).toBeLessThan(0);
+    expect(d.reason).toMatch(/historically lasted about 2\.0h/);
+  });
+
+  it("liderança longa (WETH, 518h) ainda limita 30 dias — não se promete durabilidade que ninguém observou", () => {
+    // 518h = 21,6 dias. O corte é a própria honestidade da censura: a janela
+    // observada tem 24 dias, então afirmar 30 dias de vantagem seria extrapolar
+    // além do registro. O MOVE continua de pé, com ganho menor e declarado.
+    const d = decideMove(readings, { ...posicao, expectedLeadHours: 518 });
+    expect(d.action).toBe("MOVE");
+    expect(d.effectiveHorizonDays).toBeCloseTo(518 / 24, 10);
+    expect(d.horizonLimitedByPersistence).toBe(true);
+    expect(d.expectedLeadHours).toBe(518);
+  });
+
+  it("horizonte mais curto que a liderança medida passa intacto", () => {
+    const d = decideMove(readings, { ...posicao, horizonDays: 7, expectedLeadHours: 518 });
+    expect(d.action).toBe("MOVE");
+    expect(d.effectiveHorizonDays).toBe(7);
+    expect(d.horizonLimitedByPersistence).toBe(false);
+    expect(d.reason).not.toMatch(/not the 7 days/);
+  });
+
+  it("o desconto NUNCA aumenta o ganho — só pode encurtar o horizonte", () => {
+    const semDesconto = decideMove(readings, posicao);
+    for (const horas of [1, 2, 12, 24, 240, 720, 10_000]) {
+      const comDesconto = decideMove(readings, { ...posicao, expectedLeadHours: horas });
+      expect(comDesconto.effectiveHorizonDays).toBeLessThanOrEqual(semDesconto.effectiveHorizonDays);
+      expect(comDesconto.expectedNetGainUsd).toBeLessThanOrEqual(semDesconto.expectedNetGainUsd);
+    }
+  });
+
+  it("capital OCIOSO não sofre desconto — quem sai de 0% segue recebendo depois de o ranking girar", () => {
+    // Aqui encurtar o horizonte recomendaria deixar dinheiro parado, que é o
+    // erro oposto e igualmente caro.
+    const d = decideMove(readings, { ...posicao, currentProtocol: null, expectedLeadHours: 2 });
+    expect(d.action).toBe("MOVE");
+    expect(d.effectiveHorizonDays).toBe(30);
+    expect(d.horizonLimitedByPersistence).toBe(false);
+  });
+
+  it("valores inválidos de duração são ignorados em vez de zerar o ganho", () => {
+    for (const invalido of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const d = decideMove(readings, { ...posicao, expectedLeadHours: invalido });
+      expect(d.effectiveHorizonDays).toBe(30);
+      expect(d.expectedLeadHours).toBeNull();
+      expect(d.action).toBe("MOVE");
+    }
+  });
+
+  it("o HOLD por persistência explica a conta em horas, não em fração de dia", () => {
+    const d = decideMove(readings, { ...posicao, expectedLeadHours: 2 });
+    expect(d.reason).toContain("2.0h");
+    expect(d.reason).not.toContain("0.08 days");
+  });
+});

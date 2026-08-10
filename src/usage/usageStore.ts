@@ -48,6 +48,7 @@ export type UsageRoute =
   | "capacity"
   | "sensitivity"
   | "exposure"
+  | "persistence"
   | "other";
 export type UsageChannel = "rest" | "mcp";
 
@@ -76,6 +77,9 @@ export function routeFromResourceUrl(url: string | undefined): UsageRoute {
   if (url.includes("/capacity/")) return "capacity";
   if (url.includes("/sensitivity/")) return "sensitivity";
   if (url.includes("/exposure/")) return "exposure";
+  // Rota mais cara do catálogo (2026-08-10): cair em "other" apagaria do funil
+  // justamente a venda que mais importa acompanhar.
+  if (url.includes("/persistence/")) return "persistence";
   return "other";
 }
 

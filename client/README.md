@@ -12,6 +12,7 @@ Thin [x402](https://x402.org) client for [YieldSignal](https://yieldsignal.verce
 | `getCapacity` | Can I actually withdraw my size from that market? |
 | `getSensitivity` | How close is this market to the kink where borrow rates explode? |
 | `getExposure` | I'm in N venues — but behind how many distinct risks? |
+| `getPersistence` | How long does the answer actually stay true before the leader flips? |
 
 This package only wraps the paid HTTP request (via [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch)). It does not provision a wallet or pick a signer for you — bring your own `x402Client`/`x402HTTPClient` with a funded Base wallet.
 
@@ -57,6 +58,15 @@ const cap = await yieldSignal.getCapacity("USDC", 200_000);
 const sens = await yieldSignal.getSensitivity("USDC");
 // → tightestToKink: { protocol: "compound", headroomBps: 18 }
 //   i.e. 0.18 percentage points from where borrowing goes 4% → 16%
+
+// How long does a call here actually hold? (the one no other feed can answer)
+const p = await yieldSignal.getPersistence("USDC");
+// → persistence.medianLeadHours: 2, roundTripShare: 0.5, edgeValueUsdPer10k: 0.0107
+//   i.e. the USDC leader flips every ~2h, half the flips are the same pair
+//   trading places, and chasing it earns about a cent per $10k before gas.
+//   Compare WETH: the leader has not changed once in 518h (reported as a floor).
+// → gapVsDuration.discriminates: false
+//   a wider lead is NOT more durable (Spearman -0.04, n=177) — measured, not assumed.
 
 // I'm in three venues — am I actually diversified?
 const exp = await yieldSignal.getExposure("USDC", { aave: 200_000, compound: 50_000, morpho: 150_000 });

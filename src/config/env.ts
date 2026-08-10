@@ -101,6 +101,16 @@ const schema = z.object({
     .string()
     .regex(/^\$\d+(\.\d{1,6})?$/, 'DECISION_PRICE_USD precisa seguir o formato "$0.50" (cifrão + valor decimal)')
     .default("$0.50"),
+  // Preço das rotas de PERSISTÊNCIA — o mais caro do catálogo, e por um motivo
+  // estrutural: é a única família de rotas que um concorrente não consegue
+  // reproduzir lendo as mesmas fontes públicas. Todas as outras derivam do
+  // estado ATUAL do mercado, que está no subgraph de quem quiser; esta deriva de
+  // 24 dias de previsões datadas e imutáveis no EAS, que não dá pra retroagir.
+  // O custo de entrada de um concorrente aqui não é técnico, é TEMPO.
+  PERSISTENCE_PRICE_USD: z
+    .string()
+    .regex(/^\$\d+(\.\d{1,6})?$/, 'PERSISTENCE_PRICE_USD precisa seguir o formato "$1.00" (cifrão + valor decimal)')
+    .default("$1.00"),
   // Alerta operacional opcional pro dono (mesmo padrão do YieldPilot). Ambos
   // vazios = notificação desligada (no-op silencioso, ver notify/telegram.ts);
   // o resto do produto funciona normalmente sem isso. Usado hoje pra avisar

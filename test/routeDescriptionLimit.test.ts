@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FINAL_DESCRIPTIONS, MAX_DESCRIPTION_CHARS } from "../src/expressApp.js";
+import { FINAL_DESCRIPTIONS, MAX_DESCRIPTION_CHARS, PAID_PATHS } from "../src/expressApp.js";
 
 /**
  * O facilitador da CDP recusa qualquer pagamento cujo `resource.description`
@@ -26,15 +26,17 @@ describe("limite de tamanho da description das rotas pagas", () => {
     ...Object.entries(FINAL_DESCRIPTIONS.capacity).map(([asset, d]) => [`capacity/${asset}`, d] as const),
     ...Object.entries(FINAL_DESCRIPTIONS.sensitivity).map(([asset, d]) => [`sensitivity/${asset}`, d] as const),
     ...Object.entries(FINAL_DESCRIPTIONS.exposure).map(([asset, d]) => [`exposure/${asset}`, d] as const),
+    ...Object.entries(FINAL_DESCRIPTIONS.persistence).map(([asset, d]) => [`persistence/${asset}`, d] as const),
   ];
 
   it("cobre todas as rotas pagas", () => {
-    // Guarda contra o teste passar por estar medindo um conjunto vazio ou
-    // desatualizado: 3 assets x 2 famílias (signal/decision) + 2 de
-    // durabilidade + 2 de capacidade + 2 de sensibilidade — as três últimas são
-    // só LendingAssetId (staking não tem mercado de empréstimo, a DefiLlama não
-    // itemiza incentivo nos 5 protocolos de staking, e não há curva de juros).
-    expect(todas).toHaveLength(14);
+    // Amarrado a PAID_PATHS, não a um número escrito à mão. A versão anterior
+    // fixava 14 e a lista acima era hand-kept: quando a família de persistência
+    // entrou, o teste seguiu passando medindo as 14 antigas e as 3 descrições
+    // novas ficaram SEM verificação de tamanho — que é precisamente a falha
+    // invisível (rota que nunca consegue receber pagamento) que este arquivo
+    // existe pra impedir. Agora, somar rota paga sem somar descrição quebra aqui.
+    expect(todas).toHaveLength(PAID_PATHS.length);
   });
 
   it.each(todas)("%s cabe no limite do facilitador", (rota, descricao) => {

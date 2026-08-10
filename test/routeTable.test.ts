@@ -9,6 +9,7 @@ import {
   CAPACITY_PATHS,
   SENSITIVITY_PATHS,
   EXPOSURE_PATHS,
+  PERSISTENCE_PATHS,
 } from "../src/expressApp.js";
 
 /**
@@ -20,10 +21,19 @@ import {
  * 500 chars da description, que já custou um dia sem conseguir receber.
  */
 describe("tabela de rotas", () => {
-  it("cobre as 6 famílias de produto", () => {
-    // 3 assets de signal + 3 de decisão + 2 cada de durabilidade, capacidade,
-    // sensibilidade e exposição (só LendingAssetId nas quatro analíticas).
-    expect(PAID_PATHS).toHaveLength(14);
+  it("cobre as 7 famílias de produto", () => {
+    // 3 assets de signal + 3 de decisão + 3 de persistência + 2 cada de
+    // durabilidade, capacidade, sensibilidade e exposição (só LendingAssetId nas
+    // quatro analíticas). Persistência cobre os 3 porque a fonte dela é o
+    // histórico atestado, que existe para os 3 — não a curva de juros.
+    expect(PAID_PATHS).toHaveLength(17);
+  });
+
+  it("toda rota de persistência tem descrição própria", () => {
+    for (const [asset, path] of Object.entries(PERSISTENCE_PATHS)) {
+      expect(PAID_PATHS).toContain(path);
+      expect(FINAL_DESCRIPTIONS.persistence[asset as keyof typeof FINAL_DESCRIPTIONS.persistence]).toBeTruthy();
+    }
   });
 
   it("nenhum caminho pago se repete", () => {

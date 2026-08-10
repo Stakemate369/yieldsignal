@@ -13,9 +13,12 @@ import { computeSignal, type YieldSignal, type SignalRate } from "./computeSigna
  *
  * Reaproveita a mesma matemática de break-even já validada em produção no
  * YieldPilot (strategy/breakeven.ts): o ganho esperado no horizonte tem que
- * superar o custo de mover. Sem histerese aqui — o YieldSignal não guarda
- * posição do comprador entre chamadas; o comprador informa a posição atual
- * dele a cada chamada.
+ * superar o custo de mover. O YieldSignal não guarda posição do comprador entre
+ * chamadas — o comprador informa a posição atual dele a cada chamada.
+ *
+ * A HISTERESE entra por outro caminho (2026-08-10): não como memória da posição,
+ * mas como memória do MERCADO — quanto a liderança do destino costumou durar,
+ * medida no registro on-chain. Ver `MoveDecisionInput.expectedLeadHours`.
  */
 
 export type MoveAction = "MOVE" | "HOLD";
@@ -40,6 +43,24 @@ export interface MoveDecisionInput {
   moveCostUsd: number;
   /** Por quantos dias o comprador espera manter a posição antes de reavaliar. Ganho só conta até aqui. */
   horizonDays: number;
+  /**
+   * HISTERESE — por quantas horas a liderança do destino costumou durar, medida
+   * no registro on-chain (attestation/persistence.ts). Quando informada, o ganho
+   * para de ser projetado no horizonte inteiro do comprador e passa a ser
+   * projetado só enquanto a vantagem historicamente existiu.
+   *
+   * Por que (medido em 2026-08-10, 439 atestações / 24 dias): a liderança do
+   * USDC durou 2h (mediana de 167 trocas, metade delas vaivém entre os mesmos
+   * dois protocolos), a do WETH não trocou nenhuma vez em 518h. Projetar
+   * "+40bps por 30 dias" sobre uma vantagem que morre em duas horas superestima
+   * o ganho em três ordens de grandeza e empurra o comprador pra um MOVE que só
+   * paga gas — o erro mais caro que este produto pode cometer.
+   *
+   * `null`/ausente = sem base histórica: o horizonte do comprador é usado
+   * inteiro (comportamento anterior), mas a resposta DECLARA que não houve
+   * desconto, em vez de deixar parecer que a durabilidade foi verificada.
+   */
+  expectedLeadHours?: number | null;
 }
 
 export interface MoveDecision {
@@ -51,8 +72,21 @@ export interface MoveDecision {
   to: ProtocolId;
   /** Ganho de APY líquido (ajustado por risco) de sair de `from` e entrar em `to`, em bps. Capital ocioso: é o APY inteiro do destino. */
   netApyGainBps: number;
-  /** Ganho absoluto esperado no horizonte, DEPOIS de descontar `moveCostUsd`. Positivo => mover compensa. */
+  /** Ganho absoluto esperado no horizonte EFETIVO, DEPOIS de descontar `moveCostUsd`. Positivo => mover compensa. */
   expectedNetGainUsd: number;
+  /**
+   * Horizonte de fato usado na conta: o menor entre o que o comprador pediu e
+   * quanto a liderança do destino historicamente durou. Igual a `horizonDays`
+   * quando não há histórico ou quando a liderança dura mais que o pedido.
+   */
+  effectiveHorizonDays: number;
+  /** O horizonte do comprador foi encurtado pela durabilidade medida? */
+  horizonLimitedByPersistence: boolean;
+  /**
+   * Quantas horas a liderança do destino durou historicamente. `null` = não
+   * medido — e então nenhum desconto foi aplicado.
+   */
+  expectedLeadHours: number | null;
   /** Dias até o ganho pagar o custo de mover. `null` se não há ganho positivo (nunca paga). */
   breakEvenDays: number | null;
   /**
@@ -157,7 +191,26 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
   const netApyGainBps = best.weightedApyBps - currentRate;
 
   const annualGainUsd = (input.amountUsd * netApyGainBps) / 10_000;
-  const gainInHorizonUsd = annualGainUsd * (input.horizonDays / 365);
+
+  // HISTERESE. O desconto vale pro ganho que é uma VANTAGEM SOBRE OUTRA
+  // POSIÇÃO — essa vantagem é que evapora quando a liderança gira. Capital
+  // OCIOSO é caso diferente: quem sai de 0% e entra num protocolo passa a
+  // receber a taxa do mercado e continua recebendo depois de o ranking mudar,
+  // então encurtar o horizonte ali subestimaria o ganho real e faria o serviço
+  // recomendar deixar dinheiro parado. Desconto só quando há posição de origem.
+  const leadHours =
+    input.expectedLeadHours !== null &&
+    input.expectedLeadHours !== undefined &&
+    Number.isFinite(input.expectedLeadHours) &&
+    input.expectedLeadHours > 0
+      ? input.expectedLeadHours
+      : null;
+  const persistenceApplies = leadHours !== null && input.currentProtocol !== null;
+  const leadDays = persistenceApplies ? (leadHours as number) / 24 : null;
+  const effectiveHorizonDays = leadDays !== null ? Math.min(input.horizonDays, leadDays) : input.horizonDays;
+  const horizonLimitedByPersistence = effectiveHorizonDays < input.horizonDays;
+
+  const gainInHorizonUsd = annualGainUsd * (effectiveHorizonDays / 365);
   const expectedNetGainUsd = gainInHorizonUsd - input.moveCostUsd;
 
   // break-even em dias: custo / ganho-diário. Só definido se há ganho positivo.
@@ -187,6 +240,23 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
   let action: MoveAction;
   let reason: string;
 
+  // Horizonte de 2h vira "0.08 days", que não se lê. Abaixo de um dia a frase
+  // sai em horas — é a mesma grandeza, escrita de um jeito que o comprador
+  // (humano ou LLM) consegue conferir.
+  const prazo = (dias: number): string =>
+    dias < 1 ? `${(dias * 24).toFixed(1)}h` : `${dias.toFixed(dias < 10 ? 1 : 0)} days`;
+
+  // As duas faces da histerese: quando encurtou, dizer por quê; quando não
+  // havia base pra encurtar, dizer que não havia — calar sobre isso deixaria
+  // parecer que a durabilidade foi verificada e deu longa.
+  const persistenceNote = horizonLimitedByPersistence
+    ? ` Gain is projected over ${prazo(effectiveHorizonDays)}, not the ${input.horizonDays} days you asked for: ${best.protocol}'s lead in this market has historically lasted about ${(leadHours as number).toFixed(1)}h (measured from on-chain attestations, see /persistence), and the edge is not assumed to outlive it.`
+    : "";
+  const noPersistenceNote =
+    leadHours === null && input.currentProtocol !== null
+      ? ` Note: no measured leadership durability was available for this asset, so the gain is projected over your full horizon with no persistence discount — treat it as an upper bound.`
+      : "";
+
   // `reason` é vendido ao robô-comprador (superfície internacional) — em
   // inglês pra bater com o resto do produto (descrições de rota, sinal,
   // README, plugins). Comentários seguem em pt pro dono/mantenedor.
@@ -201,8 +271,11 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
     reason = `Your current position already yields the same or more than the best alternative on a risk-adjusted basis (gain of ${netApyGainBps}bps). Moving would only cost gas. HOLD.`;
   } else if (expectedNetGainUsd <= 0) {
     action = "HOLD";
-    const beStr = breakEvenDays !== null ? ` (break-even in ~${breakEvenDays.toFixed(0)} days, past your ${input.horizonDays}-day horizon)` : "";
-    reason = `The ${netApyGainBps}bps gain does not cover the move cost ($${input.moveCostUsd.toFixed(4)}) over your ${input.horizonDays}-day horizon${beStr}. HOLD.`;
+    const beStr =
+      breakEvenDays !== null
+        ? ` (break-even in ~${prazo(breakEvenDays)}, past the ${prazo(effectiveHorizonDays)} the edge is expected to last)`
+        : "";
+    reason = `The ${netApyGainBps}bps gain does not cover the move cost ($${input.moveCostUsd.toFixed(4)}) over ${prazo(effectiveHorizonDays)}${beStr}. HOLD.${persistenceNote}`;
   } else {
     action = "MOVE";
     // As ressalvas entram na FRASE, não só no objeto: quem consome via LLM lê o
@@ -214,7 +287,7 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
     const depthCaveat = crowdsDestination
       ? ` Note: your $${input.amountUsd.toLocaleString("en-US")} would be ${positionShareOfDestinationPct}% of ${best.protocol}'s $${Math.round(best.tvlUsd as number).toLocaleString("en-US")} market — large enough that entering dilutes the rate you are moving for.`
       : "";
-    reason = `Moving ${input.currentProtocol ?? "idle capital"} → ${best.protocol} yields +${netApyGainBps}bps risk-adjusted; estimated net gain of $${expectedNetGainUsd.toFixed(4)} over ${input.horizonDays} days after the move cost${breakEvenDays !== null ? ` (break-even in ~${breakEvenDays.toFixed(1)} days)` : ""}.${incentiveCaveat}${depthCaveat}`;
+    reason = `Moving ${input.currentProtocol ?? "idle capital"} → ${best.protocol} yields +${netApyGainBps}bps risk-adjusted; estimated net gain of $${expectedNetGainUsd.toFixed(4)} over ${prazo(effectiveHorizonDays)} after the move cost${breakEvenDays !== null ? ` (break-even in ~${prazo(breakEvenDays)})` : ""}.${persistenceNote}${noPersistenceNote}${incentiveCaveat}${depthCaveat}`;
   }
 
   return {
@@ -224,6 +297,9 @@ export function decideMove(readings: RateReading[], input: MoveDecisionInput): M
     to: best.protocol,
     netApyGainBps,
     expectedNetGainUsd,
+    effectiveHorizonDays,
+    horizonLimitedByPersistence,
+    expectedLeadHours: leadHours,
     breakEvenDays,
     gainDependsOnIncentives,
     positionShareOfDestinationPct,

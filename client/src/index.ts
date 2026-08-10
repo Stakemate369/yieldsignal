@@ -146,6 +146,62 @@ export interface ExposureReport {
 }
 
 /**
+ * Quanto tempo a liderança de um mercado costuma durar, medida no histórico
+ * atestado on-chain. Único relatório do catálogo que não depende de leitura de
+ * mercado — e por isso o único cujo `signal` pode vir `null` (as fontes de taxa
+ * podem estar fora do ar sem impedir a entrega).
+ */
+export interface AssetPersistence {
+  asset: string;
+  attestations: number;
+  spells: number;
+  closedSpells: number;
+  /** `null` abaixo da amostra mínima — nunca um número que finge precisão. */
+  medianLeadHours: number | null;
+  meanLeadHours: number | null;
+  longestClosedLeadHours: number | null;
+  currentProtocol: string;
+  currentLeadHours: number;
+  /** `true` = a liderança ainda não acabou; a duração é PISO, não medida. */
+  currentLeadCensored: boolean;
+  survival: { atLeastHours: number; rate: number | null }[];
+  /** Duração usada pelo /decision pra limitar o horizonte do ganho. */
+  expectedLeadHours: number | null;
+  observationResolutionHours: number | null;
+  medianGapBps: number | null;
+  /** Quanto perseguir o líder rende por US$10k durante uma liderança, ANTES do gas. */
+  edgeValueUsdPer10k: number | null;
+  topSwitchPair: string | null;
+  roundTripShare: number | null;
+  sampleWarning: string | null;
+}
+
+export interface PersistenceReport {
+  asset: string;
+  basis: "leadership-spells-from-onchain-attestations";
+  observedFrom: string | null;
+  observedTo: string | null;
+  observedDays: number | null;
+  attestationsInWindow: number;
+  persistence: AssetPersistence;
+  /**
+   * Um gap maior dura mais? Medido, e a resposta é não — `discriminates: false`
+   * significa que usar o tamanho da vantagem como proxy de confiabilidade é erro.
+   */
+  gapVsDuration: {
+    spearman: number | null;
+    n: number;
+    bands: { label: string; minBps: number; maxBps: number | null; spells: number; medianLeadHours: number | null }[];
+    discriminates: boolean | null;
+    note: string;
+  };
+  appliedByDecisionRouteAsLeadHours: number | null;
+  /** `null` quando as fontes de taxa falharam — o relatório é entregue mesmo assim. */
+  signal: YieldSignal | null;
+  [field: string]: unknown;
+}
+
+/**
  * Verifica um par (corpo bruto, headers de assinatura) contra a resposta
  * servida — duas checagens independentes, ambas precisam passar:
  * 1. `contentHash` embutido no struct EIP-712 bate com `keccak256(raw)` (prova
@@ -253,6 +309,17 @@ export function createYieldSignalClient(client: x402Client | x402HTTPClient, opt
     /** A que distância o mercado está do joelho onde a taxa de empréstimo dispara. */
     async getSensitivity(asset: LendingAsset = "USDC"): Promise<SensitivityReport> {
       return fetchProduct<SensitivityReport>(`/sensitivity/${RESOURCE_PATHS[asset]}`);
+    },
+
+    /**
+     * Quanto tempo a liderança deste mercado costuma durar, do histórico
+     * atestado on-chain. Responde a pergunta que decide se mover capital
+     * compensa — e que nenhuma outra fonte de dado DeFi responde, porque exige
+     * um registro datado das próprias respostas passadas. Os três assets.
+     * Preço mais alto do catálogo.
+     */
+    async getPersistence(asset: YieldSignalAsset = "USDC"): Promise<PersistenceReport> {
+      return fetchProduct<PersistenceReport>(`/persistence/${RESOURCE_PATHS[asset]}`);
     },
 
     /**

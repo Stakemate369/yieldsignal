@@ -30,6 +30,8 @@ export interface LandingPageParams {
   /** Preço das 4 rotas analíticas — próprio desde 2026-08-10 (ver config/env.ts). */
   analyticsPrice: string;
   decisionPrice: string;
+  /** Preço das rotas de persistência — o mais alto do catálogo (ver config/env.ts). */
+  persistencePrice: string;
 }
 
 const ASSET_LABELS: Record<AssetId, string> = {
@@ -141,7 +143,7 @@ function accuracySection(score: AccuracyScore | null, windowed?: WindowedAccurac
 }
 
 export function renderLandingPage(params: LandingPageParams): string {
-  const { score, windowed, signalPrice, analyticsPrice, decisionPrice } = params;
+  const { score, windowed, signalPrice, analyticsPrice, decisionPrice, persistencePrice } = params;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -156,13 +158,13 @@ export function renderLandingPage(params: LandingPageParams): string {
   foram compradas por ninguém de fora (medido em 10/08/2026), e uma das razões
   é que ninguém que não fale x402 conseguia sequer descobrir que elas existem.
 -->
-<meta name="description" content="Risk-weighted DeFi yield and risk intelligence sold per call over x402: yield signal, MOVE/HOLD decision, incentive durability, exit capacity, borrow-rate sensitivity and shared exposure. USDC/WETH lending on Base and ETH liquid staking, EIP-712 signed and attested on-chain via EAS.">
+<meta name="description" content="Risk-weighted DeFi yield and risk intelligence sold per call over x402: yield signal, MOVE/HOLD decision, incentive durability, exit capacity, borrow-rate sensitivity, shared exposure and leadership persistence. USDC/WETH lending on Base and ETH liquid staking, EIP-712 signed and attested on-chain via EAS.">
 <link rel="canonical" href="https://yieldsignal.vercel.app/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="YieldSignal">
 <meta property="og:url" content="https://yieldsignal.vercel.app/">
 <meta property="og:title" content="YieldSignal — verifiable yield &amp; risk signals for autonomous agents">
-<meta property="og:description" content="Six paid products over x402: signal, decision, durability, exit capacity, rate sensitivity and shared exposure. Every response EIP-712 signed; public on-chain track record via EAS.">
+<meta property="og:description" content="Seven paid products over x402: signal, decision, durability, exit capacity, rate sensitivity, shared exposure and leadership persistence. Every response EIP-712 signed; public on-chain track record via EAS.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="YieldSignal — verifiable yield &amp; risk signals for autonomous agents">
 <meta name="twitter:description" content="Six paid products over x402, EIP-712 signed, with a public on-chain track record.">
@@ -190,7 +192,7 @@ export function renderLandingPage(params: LandingPageParams): string {
 <h1>YieldSignal</h1>
 <p class="sub">Risk-weighted yield signals for autonomous agents, paid per call via <a href="https://x402.org">x402</a> — no API key, no account. ETH liquid staking on Ethereum mainnet (Lido, Rocket Pool, Coinbase Wrapped Staked ETH, Frax Ether, Binance Staked ETH) plus USDC and WETH lending on Base (Aave, Compound, Morpho, Moonwell, Euler, Fluid).</p>
 
-<p><span class="badge">${signalPrice}/call signal</span><span class="badge">${analyticsPrice}/call analytics</span><span class="badge">${decisionPrice}/call decision</span><span class="badge">signed + on-chain track record</span></p>
+<p><span class="badge">${signalPrice}/call signal</span><span class="badge">${analyticsPrice}/call analytics</span><span class="badge">${decisionPrice}/call decision</span><span class="badge">${persistencePrice}/call persistence</span><span class="badge">signed + on-chain track record</span></p>
 
 ${accuracySection(score, windowed)}
 
@@ -220,9 +222,16 @@ GET https://yieldsignal.vercel.app${ASSET_ROUTES.WETH}</pre>
 <pre>GET /exposure/usdc-base-yield?positions=aave:200000,compound:50000,morpho:150000</pre>
 <p>The market is full of <em>event</em> detectors — depeg alerts, hack alerts, liquidation alerts — and most are free. None answer the question that actually costs money: <strong>am I exposed, and through what path?</strong> In the Stream Finance collapse only 1 of ~320 MetaMorpho vaults held the broken asset directly, yet $93M of loss became $285M of contagion. Read live for the portfolio above: three venues, and <strong>81% of attributable capital behind a single collateral (cbBTC), arriving through both Compound and Morpho</strong> — plus Aave and Compound sharing the exact same 90% kink, so splitting between them buys nothing against a utilization shock. Morpho is attributed per isolated market, Compound by its real posted-collateral basket; Aave is reported unattributed, because a v3 supplier is exposed to the whole pool and splitting that across assets would imply diversification that does not exist. Structural shared exposure, not a correlation estimate.</p>
 
+<h2>How long does the answer hold? (persistence)</h2>
+<pre>GET /persistence/usdc-base-yield</pre>
+<p>Every other endpoint here — and every competing yield feed — answers <em>what pays best now</em>. None answers <strong>how long that stays true</strong>, which is the number that decides whether moving capital is worth the gas. This endpoint answers it from this service's own hourly attestations on Base: the median time a protocol stayed the best pick, survival at 6/24/72h, and how much of the rotation is just two protocols trading places.</p>
+<p>Measured over 24 days and 439 attestations, the three assets are not remotely the same product: <strong>the WETH leader never changed once</strong> (518h and counting, reported as a floor), the ETH staking leader changed every <strong>~26h</strong>, and the USDC leader changed every <strong>~2h</strong> — with <strong>half of those 167 switches being a round trip between the same two protocols</strong>. Chasing the USDC leader is worth <strong>$0.011 per $10,000</strong> before gas; chasing the WETH one, <strong>$6.50</strong>. Same catalogue, 600x apart in what following it is actually worth.</p>
+<p>It also answers, empirically, a question everyone assumes: does a bigger lead last longer? <strong>It does not</strong> — Spearman -0.04 across 177 completed leadership spells, with the 0-24bps and &gt;=300bps bands both sitting at a 2h median. Gap size is not a usable proxy for confidence, and this is the only place that number is published. Every input is a public attestation UID, so you can recompute all of it from <a href="https://base.easscan.org">base.easscan.org</a> and get the same answer without trusting this server. Assets whose lead has not yet changed are reported as a floor with a censoring flag, never as a median — and sample sizes travel with every figure.</p>
+<p>The <code>/decision</code> routes consume this internally: the expected gain is projected over the horizon you asked for <em>or</em> over the measured lead duration, whichever is shorter. A 30-day projection on a 2h edge is how a MOVE that only pays gas gets recommended.</p>
+
 <h2>MCP</h2>
 <pre>POST https://yieldsignal.vercel.app/mcp</pre>
-<p>Tools <code>get_yield_signal</code> and <code>get_yield_decision</code> (optional <code>asset</code>: <code>"ETH_STAKING"</code>, <code>"USDC"</code> or <code>"WETH"</code>), plus <code>get_yield_durability</code>, <code>get_exit_capacity</code>, <code>get_rate_sensitivity</code> and <code>get_shared_exposure</code> (Base lending only: <code>"USDC"</code> or <code>"WETH"</code>), gated per-call via <a href="https://www.npmjs.com/package/@x402/mcp">@x402/mcp</a> — <code>tools/list</code>/<code>initialize</code> stay free, only the tool call is paid. Also available as an <a href="https://www.npmjs.com/package/elizaos-plugin-yieldsignal">elizaOS plugin</a>.</p>
+<p>Tools <code>get_yield_signal</code> and <code>get_yield_decision</code> (optional <code>asset</code>: <code>"ETH_STAKING"</code>, <code>"USDC"</code> or <code>"WETH"</code>), plus <code>get_yield_durability</code>, <code>get_exit_capacity</code>, <code>get_rate_sensitivity</code> and <code>get_shared_exposure</code> (Base lending only: <code>"USDC"</code> or <code>"WETH"</code>) and <code>get_leadership_persistence</code> (all three assets), gated per-call via <a href="https://www.npmjs.com/package/@x402/mcp">@x402/mcp</a> — <code>tools/list</code>/<code>initialize</code> stay free, only the tool call is paid. Also available as an <a href="https://www.npmjs.com/package/elizaos-plugin-yieldsignal">elizaOS plugin</a>.</p>
 
 <h2>Every reading is source-tagged</h2>
 <pre>{

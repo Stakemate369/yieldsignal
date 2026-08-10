@@ -24,7 +24,8 @@ import { collectExposureFactors } from "./market-data/exposureFactors.js";
 import { parsePositions } from "./signal/parsePositions.js";
 import { computeAccuracyScore } from "./attestation/accuracyScore.js";
 import { computeWindowedAccuracy } from "./attestation/windowedAccuracy.js";
-import { fetchSignalAttestations } from "./attestation/queryAttestations.js";
+import { leadHoursForDecision } from "./attestation/persistence.js";
+import { loadAttestations, loadPersistence } from "./attestation/attestationCache.js";
 import { GUARANTEE_TERMS } from "./guarantee/terms.js";
 import type { AssetId, LendingAssetId } from "./market-data/types.js";
 import { FLAGSHIP_ASSET } from "./market-data/types.js";
@@ -124,6 +125,26 @@ export const SENSITIVITY_PATHS: Record<LendingAssetId, string> = {
 };
 
 /**
+ * CAMADA 2: rotas de PERSISTÊNCIA — "quanto tempo esta resposta costuma ficar
+ * de pé?". Única família do catálogo que não lê mercado nenhum: a fonte é o
+ * histórico atestado no EAS (attestation/persistence.ts).
+ *
+ * Por que é o produto mais defensável do serviço: todo o resto responde sobre o
+ * estado ATUAL, que qualquer um lê nos mesmos subgraphs. Esta responde sobre o
+ * PASSADO do próprio serviço, gravado hora a hora e imutável. Um concorrente
+ * que copiasse a matemática inteira hoje precisaria ainda de meses de registro
+ * datado pra responder a mesma pergunta — e não dá pra retroagir.
+ *
+ * Os três assets, não só lending: a medida vale onde há atestação, e as três
+ * séries existem desde 2026-07-17.
+ */
+export const PERSISTENCE_PATHS: Record<AssetId, string> = {
+  ETH_STAKING: "/persistence/eth-staking-yield",
+  USDC: "/persistence/usdc-base-yield",
+  WETH: "/persistence/weth-base-yield",
+};
+
+/**
  * Todo caminho PAGO do serviço, numa lista só. Existe pra ser testável: sem
  * ela, "existe alias sombreando rota paga?" só dá pra responder lendo o arquivo
  * inteiro — e um alias que colide com um caminho canônico serviria um redirect
@@ -137,6 +158,7 @@ export const PAID_PATHS: readonly string[] = [
   ...Object.values(CAPACITY_PATHS),
   ...Object.values(SENSITIVITY_PATHS),
   ...Object.values(EXPOSURE_PATHS),
+  ...Object.values(PERSISTENCE_PATHS),
 ];
 
 const SENSITIVITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
@@ -152,6 +174,45 @@ const DURABILITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
 const CAPACITY_DESCRIPTIONS: Record<LendingAssetId, string> = {
   USDC: "Exit capacity for USDC lending on Base: per-protocol utilization and withdrawable liquidity read from the protocol's own books (Aave, Compound), plus whether your size (?amountUsd=) can be withdrawn right now and what share of the market it would be. Protocols that do not expose borrowed-vs-supplied are marked unmeasured, never assumed liquid.",
   WETH: "Exit capacity for WETH lending on Base — same contract as the USDC capacity route. Utilization is reported for every measured protocol; USD figures are omitted for WETH (no price oracle in the paid path), so size verdicts need the USDC route. Unmeasured protocols are named, never assumed liquid.",
+};
+
+/**
+ * Qual variável de preço vale pra cada caminho pago — FONTE ÚNICA.
+ *
+ * Existe por causa de um bug real que ficou vivo em produção: quando as quatro
+ * rotas analíticas ganharam preço próprio (ANALYTICS_PRICE_USD, $0.25), o
+ * registro do x402 foi atualizado e a lista do documento de descoberta não. O
+ * `/openapi.json` passou a anunciar $0.10 numa rota que cobrava $0.25.
+ *
+ * A quebra é INVISÍVEL do lado do servidor — o 402 sai com o valor certo e a
+ * telemetria não acusa nada. Quem quebra é o agente que leu o documento,
+ * reservou o valor anunciado e recebeu cobrança maior. Com as duas listas
+ * lendo daqui, mudar preço num lugar só deixou de ser possível.
+ */
+export type PriceKey = "PRICE_USD" | "ANALYTICS_PRICE_USD" | "DECISION_PRICE_USD" | "PERSISTENCE_PRICE_USD";
+
+export function priceKeyForPath(path: string): PriceKey {
+  if (path.startsWith("/signal/")) return "PRICE_USD";
+  if (path.startsWith("/decision/")) return "DECISION_PRICE_USD";
+  if (path.startsWith("/persistence/")) return "PERSISTENCE_PRICE_USD";
+  if (
+    path.startsWith("/durability/") ||
+    path.startsWith("/capacity/") ||
+    path.startsWith("/sensitivity/") ||
+    path.startsWith("/exposure/")
+  ) {
+    return "ANALYTICS_PRICE_USD";
+  }
+  // Cair num default silencioso aqui reintroduziria exatamente o bug que esta
+  // função existe pra matar: uma família nova cobraria/anunciaria um preço que
+  // ninguém escolheu. Melhor não subir do que subir cobrando errado.
+  throw new Error(`caminho pago sem faixa de preço definida: ${path}`);
+}
+
+const PERSISTENCE_DESCRIPTIONS: Record<AssetId, string> = {
+  USDC: "How long a USDC leadership call actually holds, from hourly on-chain attestations (EAS): median lead duration, survival at 6/24/72h, how much of the rotation is the same two protocols trading places, and what chasing the leader is worth per $10k before gas. Also reports whether a wider lead lasts longer — measured, and it does not. Observed history with sample sizes, never a forecast.",
+  WETH: "How long a WETH leadership call actually holds — same contract as the USDC persistence route. Where the lead has not changed in the observed window, the duration is reported as a floor with a censoring flag, never as a median. Observed history with sample sizes, never a forecast.",
+  ETH_STAKING: "How long an ETH liquid staking leadership call actually holds — same contract as the lending persistence routes. Median lead duration, survival at 6/24/72h, and the round-trip share of leader rotation. Observed history with sample sizes, never a forecast.",
 };
 
 const DECISION_DESCRIPTIONS: Record<AssetId, string> = {
@@ -230,6 +291,10 @@ export const SHORT_ALIASES: Record<string, string> = {
   "/exposure/usdc": EXPOSURE_PATHS.USDC,
   "/exposure/weth": EXPOSURE_PATHS.WETH,
   "/exposure": EXPOSURE_PATHS.USDC,
+  "/persistence/usdc": PERSISTENCE_PATHS.USDC,
+  "/persistence/weth": PERSISTENCE_PATHS.WETH,
+  "/persistence/eth-staking": PERSISTENCE_PATHS.ETH_STAKING,
+  "/persistence": PERSISTENCE_PATHS[FLAGSHIP_ASSET],
 };
 
 /**
@@ -296,6 +361,7 @@ export const FINAL_DESCRIPTIONS: {
   capacity: Record<LendingAssetId, string>;
   sensitivity: Record<LendingAssetId, string>;
   exposure: Record<LendingAssetId, string>;
+  persistence: Record<AssetId, string>;
 } = {
   signal: Object.fromEntries(
     (Object.keys(ROUTE_DESCRIPTIONS) as AssetId[]).map((a) => [a, ROUTE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
@@ -321,6 +387,9 @@ export const FINAL_DESCRIPTIONS: {
   exposure: Object.fromEntries(
     (Object.keys(EXPOSURE_DESCRIPTIONS) as LendingAssetId[]).map((a) => [a, EXPOSURE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
   ) as Record<LendingAssetId, string>,
+  persistence: Object.fromEntries(
+    (Object.keys(PERSISTENCE_DESCRIPTIONS) as AssetId[]).map((a) => [a, PERSISTENCE_DESCRIPTIONS[a] + ACCURACY_POINTER]),
+  ) as Record<AssetId, string>,
 };
 
 /**
@@ -345,7 +414,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     routes: Object.fromEntries([
       ...(Object.keys(RESOURCE_PATHS) as AssetId[]).map((asset) => [
         `GET ${RESOURCE_PATHS[asset]}`,
-        { price: env.PRICE_USD, description: FINAL_DESCRIPTIONS.signal[asset] },
+        { price: env[priceKeyForPath(RESOURCE_PATHS[asset])], description: FINAL_DESCRIPTIONS.signal[asset] },
       ]),
       // Rotas de decisão (Camada 1) — preço PREMIUM (DECISION_PRICE_USD, default
       // $0.05 vs $0.01 do sinal cru): a decisão MOVE/HOLD vale mais que o dado
@@ -354,7 +423,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((asset) => [
         `GET ${DECISION_PATHS[asset]}`,
         {
-          price: env.DECISION_PRICE_USD,
+          price: env[priceKeyForPath(DECISION_PATHS[asset])],
           description: FINAL_DESCRIPTIONS.decision[asset],
           extensions: BAZAAR_DECISION,
         },
@@ -368,27 +437,35 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       // grátis (DefiLlama); as analíticas não competem com nada.
       ...(Object.keys(DURABILITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${DURABILITY_PATHS[asset]}`,
-        { price: env.ANALYTICS_PRICE_USD, description: FINAL_DESCRIPTIONS.durability[asset] },
+        { price: env[priceKeyForPath(DURABILITY_PATHS[asset])], description: FINAL_DESCRIPTIONS.durability[asset] },
       ]),
       ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${CAPACITY_PATHS[asset]}`,
         {
-          price: env.ANALYTICS_PRICE_USD,
+          price: env[priceKeyForPath(CAPACITY_PATHS[asset])],
           description: FINAL_DESCRIPTIONS.capacity[asset],
           extensions: BAZAAR_CAPACITY,
         },
       ]),
       ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${SENSITIVITY_PATHS[asset]}`,
-        { price: env.ANALYTICS_PRICE_USD, description: FINAL_DESCRIPTIONS.sensitivity[asset] },
+        { price: env[priceKeyForPath(SENSITIVITY_PATHS[asset])], description: FINAL_DESCRIPTIONS.sensitivity[asset] },
       ]),
       ...(Object.keys(EXPOSURE_PATHS) as LendingAssetId[]).map((asset) => [
         `GET ${EXPOSURE_PATHS[asset]}`,
         {
-          price: env.ANALYTICS_PRICE_USD,
+          price: env[priceKeyForPath(EXPOSURE_PATHS[asset])],
           description: FINAL_DESCRIPTIONS.exposure[asset],
           extensions: BAZAAR_EXPOSURE,
         },
+      ]),
+      // Persistência: o preço mais alto do catálogo. Não é posicionamento —
+      // é a única rota cuja matéria-prima (histórico datado e imutável) um
+      // concorrente não consegue comprar nem copiar, só esperar. Ver
+      // PERSISTENCE_PRICE_USD em config/env.ts.
+      ...(Object.keys(PERSISTENCE_PATHS) as AssetId[]).map((asset) => [
+        `GET ${PERSISTENCE_PATHS[asset]}`,
+        { price: env[priceKeyForPath(PERSISTENCE_PATHS[asset])], description: FINAL_DESCRIPTIONS.persistence[asset] },
       ]),
     ]),
   });
@@ -447,22 +524,34 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
   const legacySchemaUids = (env.EAS_SCHEMA_UID_V2 && env.EAS_SCHEMA_UID ? [env.EAS_SCHEMA_UID] : []) as `0x${string}`[];
   const hasAttestationSchema = Boolean(env.EAS_SCHEMA_UID || env.EAS_SCHEMA_UID_V2);
 
+  // Histórico atestado vem do cache COMPARTILHADO (attestation/attestationCache.ts)
+  // — o mesmo que a tool MCP de persistência usa. Antes cada canal buscava por
+  // conta própria e a mesma invocação fria consultava o EASScan duas vezes.
+  const cachedAttestations = () => loadAttestations(signer.address);
+
+  /**
+   * Quantas atestações entram no score DIRECIONAL. Ele compara cada atestação
+   * com o mercado de AGORA, então o viés cresce com a idade do registro — é
+   * exatamente o defeito que motivou a acurácia por janela (windowedAccuracy.ts).
+   * Ampliar a janela pioraria a métrica em vez de melhorá-la, então ela fica
+   * restrita às mais recentes; a por janela e a persistência usam TUDO, porque
+   * nelas cada atestação é julgada contra a própria época.
+   */
+  const DIRECTIONAL_SCORE_SAMPLE = 100;
+
   const cachedAccuracyScore = cachedWithTtl(async () => {
-    if (!hasAttestationSchema) return null;
-    // Uma consulta ao EASScan alimenta as duas métricas da página (direcional e
-    // por janela) — o track record reaproveita as atestações já buscadas.
-    const attestations = await fetchSignalAttestations({
-      schemaId: attestSchemaUid,
-        alsoSchemaIds: legacySchemaUids,
-      attester: signer.address,
-    });
+    const attestations = await cachedAttestations();
+    if (!attestations) return null;
+    // Vêm ordenadas por `time` desc — o corte pega as mais recentes.
     const entries = await buildTrackRecord({
       schemaUid: attestSchemaUid,
       attester: signer.address,
-      attestations,
+      attestations: attestations.slice(0, DIRECTIONAL_SCORE_SAMPLE),
     });
     return { score: computeAccuracyScore(entries), windowed: computeWindowedAccuracy(attestations) };
   }, 10 * 60 * 1000);
+
+  const cachedPersistence = () => loadPersistence(signer.address);
 
   // Handler assíncrono precisa capturar TUDO por dentro: Express 4 não trata
   // rejeição de handler async, e uma unhandled rejection derruba o processo
@@ -483,6 +572,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
           signalPrice: env.PRICE_USD,
           analyticsPrice: env.ANALYTICS_PRICE_USD,
           decisionPrice: env.DECISION_PRICE_USD,
+          persistencePrice: env.PERSISTENCE_PRICE_USD,
         }),
       );
     } catch (err) {
@@ -497,6 +587,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
             signalPrice: env.PRICE_USD,
             analyticsPrice: env.ANALYTICS_PRICE_USD,
             decisionPrice: env.DECISION_PRICE_USD,
+            persistencePrice: env.PERSISTENCE_PRICE_USD,
           }),
         );
     }
@@ -643,19 +734,15 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       return;
     }
     try {
-      // Uma consulta ao EASScan só: o score por janela precisa das atestações
-      // CRUAS (ordem/instante), o score direcional precisa das entradas já
-      // cruzadas com o mercado atual. Buscar duas vezes seria a mesma resposta
-      // paga duas vezes.
-      const attestations = await fetchSignalAttestations({
-        schemaId: attestSchemaUid,
-        alsoSchemaIds: legacySchemaUids,
-        attester: signer.address,
-      });
+      // Cache compartilhado (attestationCache.ts): o score por janela precisa
+      // das atestações CRUAS, o direcional das entradas já cruzadas com o
+      // mercado atual, e a persistência das mesmas atestações. Uma leitura só
+      // serve as três — e agora com a janela INTEIRA, não as 100 mais recentes.
+      const attestations = (await cachedAttestations()) ?? [];
       const entries = await buildTrackRecord({
         schemaUid: attestSchemaUid,
         attester: signer.address,
-        attestations,
+        attestations: attestations.slice(0, DIRECTIONAL_SCORE_SAMPLE),
       });
       res.json({
         schemaUid: env.EAS_SCHEMA_UID,
@@ -725,24 +812,33 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     ];
     return [
       ...(Object.keys(RESOURCE_PATHS) as AssetId[]).map((a) => ({
-        path: RESOURCE_PATHS[a], description: FINAL_DESCRIPTIONS.signal[a], priceUsd: env.PRICE_USD, params: [],
+        path: RESOURCE_PATHS[a], description: FINAL_DESCRIPTIONS.signal[a], priceUsd: env[priceKeyForPath(RESOURCE_PATHS[a])], params: [],
       })),
       ...(Object.keys(DECISION_PATHS) as AssetId[]).map((a) => ({
-        path: DECISION_PATHS[a], description: FINAL_DESCRIPTIONS.decision[a], priceUsd: env.DECISION_PRICE_USD, params: decisionParams,
+        path: DECISION_PATHS[a], description: FINAL_DESCRIPTIONS.decision[a], priceUsd: env[priceKeyForPath(DECISION_PATHS[a])], params: decisionParams,
       })),
+      // As quatro analíticas anunciavam PRICE_USD ($0.10) enquanto o desafio 402
+      // cobrava ANALYTICS_PRICE_USD ($0.25) — divergência introduzida quando o
+      // preço próprio das analíticas foi criado e esta lista não acompanhou.
+      // Invisível do lado do servidor (o 402 sai certo); quem quebra é o agente
+      // que leu o documento, orçou $0.10 e recebeu uma cobrança maior.
+      // `test/discoveryPrice.test.ts` amarra as duas fontes.
       ...(Object.keys(DURABILITY_PATHS) as LendingAssetId[]).map((a) => ({
-        path: DURABILITY_PATHS[a], description: FINAL_DESCRIPTIONS.durability[a], priceUsd: env.PRICE_USD, params: [],
+        path: DURABILITY_PATHS[a], description: FINAL_DESCRIPTIONS.durability[a], priceUsd: env[priceKeyForPath(DURABILITY_PATHS[a])], params: [],
       })),
       ...(Object.keys(CAPACITY_PATHS) as LendingAssetId[]).map((a) => ({
-        path: CAPACITY_PATHS[a], description: FINAL_DESCRIPTIONS.capacity[a], priceUsd: env.PRICE_USD,
+        path: CAPACITY_PATHS[a], description: FINAL_DESCRIPTIONS.capacity[a], priceUsd: env[priceKeyForPath(CAPACITY_PATHS[a])],
         params: [p("amountUsd", false, "number", "Position size in USD to test for exit. Omit for utilization and free liquidity without a verdict.")],
       })),
       ...(Object.keys(SENSITIVITY_PATHS) as LendingAssetId[]).map((a) => ({
-        path: SENSITIVITY_PATHS[a], description: FINAL_DESCRIPTIONS.sensitivity[a], priceUsd: env.PRICE_USD, params: [],
+        path: SENSITIVITY_PATHS[a], description: FINAL_DESCRIPTIONS.sensitivity[a], priceUsd: env[priceKeyForPath(SENSITIVITY_PATHS[a])], params: [],
       })),
       ...(Object.keys(EXPOSURE_PATHS) as LendingAssetId[]).map((a) => ({
-        path: EXPOSURE_PATHS[a], description: FINAL_DESCRIPTIONS.exposure[a], priceUsd: env.PRICE_USD,
+        path: EXPOSURE_PATHS[a], description: FINAL_DESCRIPTIONS.exposure[a], priceUsd: env[priceKeyForPath(EXPOSURE_PATHS[a])],
         params: [p("positions", true, "string", "REQUIRED. Positions as comma-separated protocol:usd pairs, e.g. aave:200000,morpho:150000. Known protocols: aave, morpho, compound, moonwell, euler, fluid.")],
+      })),
+      ...(Object.keys(PERSISTENCE_PATHS) as AssetId[]).map((a) => ({
+        path: PERSISTENCE_PATHS[a], description: FINAL_DESCRIPTIONS.persistence[a], priceUsd: env[priceKeyForPath(PERSISTENCE_PATHS[a])], params: [],
       })),
     ];
   }
@@ -896,7 +992,18 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     }
     try {
       const readings = await collectRates(asset);
-      const decision = decideMove(readings, parsed.input);
+      // HISTERESE: o horizonte do ganho é limitado pela durabilidade MEDIDA da
+      // liderança (ver decideMove). A leitura é best-effort de propósito — o
+      // pagamento já liquidou, e derrubar uma decisão inteira porque o EASScan
+      // piscou seria trocar uma resposta boa por nenhuma. Sem o dado, a decisão
+      // sai sem desconto E declarando que saiu sem desconto.
+      let expectedLeadHours: number | null = null;
+      try {
+        expectedLeadHours = leadHoursForDecision(await cachedPersistence(), asset);
+      } catch (err) {
+        logger.warn({ err, asset }, "sem persistência medida para a decisão — seguindo sem desconto de horizonte");
+      }
+      const decision = decideMove(readings, { ...parsed.input, expectedLeadHours });
       // Assina o sinal embutido (não o corpo inteiro da decisão) — o corpo
       // servido continua sendo a decisão completa; a assinatura cobre o dado
       // de mercado do qual a decisão deriva deterministicamente.
@@ -913,6 +1020,74 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       logger.error({ err, asset }, "falha gerando decisão");
       await recordUsage({ kind: "failed", route: "decision", channel: "rest", asset });
       res.status(503).json({ error: "falha temporária lendo taxas — tente de novo em instantes" });
+    }
+  }
+
+  /**
+   * Serve o relatório de PERSISTÊNCIA de um asset.
+   *
+   * Único produto pago que não lê mercado: a matéria-prima são as atestações do
+   * EAS. A leitura de mercado entra só pra ASSINAR a resposta (o struct EIP-712
+   * do serviço é tipado sobre o sinal) e pra situar o comprador no líder atual —
+   * e é opcional: se as fontes de taxa estiverem fora do ar, o relatório vai
+   * assim mesmo, sem assinatura e declarando isso. Deixar de entregar o produto
+   * inteiro por causa de um enfeite seria queimar um pagamento já liquidado.
+   *
+   * O recorte por asset vem acompanhado do achado ENTRE assets (gapVsDuration):
+   * ele é global por construção, e é a parte contraintuitiva do relatório.
+   */
+  async function respondWithPersistence(res: express.Response, asset: AssetId): Promise<void> {
+    try {
+      const report = await cachedPersistence();
+      const doAsset = report?.perAsset.find((a) => a.asset === asset) ?? null;
+      if (!report || !doAsset) {
+        // Sem histórico não há produto. 503 (não 200 com corpo vazio) pra o
+        // comprador saber que deve tentar de novo, e pra não parecer entrega.
+        await recordUsage({ kind: "failed", route: "persistence", channel: "rest", asset, outcome: "no_history" });
+        res.status(503).json({ error: "no attestation history available for this asset yet — retry shortly" });
+        return;
+      }
+
+      let signal: ReturnType<typeof computeSignal> | null = null;
+      try {
+        signal = computeSignal(await collectRates(asset));
+      } catch (err) {
+        logger.warn({ err, asset }, "persistência servida sem snapshot de mercado — fontes de taxa indisponíveis");
+      }
+
+      const body = {
+        asset,
+        basis: report.basis,
+        observedFrom: report.observedFrom,
+        observedTo: report.observedTo,
+        observedDays: report.observedDays,
+        attestationsInWindow: report.totalAttestations,
+        persistence: doAsset,
+        gapVsDuration: report.gapVsDuration,
+        // O mesmo número que o /decision usa pra encurtar o horizonte — exposto
+        // aqui pra o comprador poder refazer a conta dele em vez de confiar.
+        appliedByDecisionRouteAsLeadHours: doAsset.expectedLeadHours,
+        signal,
+        signedSignalText: signal ? JSON.stringify(signal) : null,
+        verifyAt: "https://base.easscan.org",
+        computedAt: report.computedAt,
+      };
+
+      if (signal) {
+        const rawSignal = JSON.stringify(signal);
+        const signed = await signPayload(signer, rawSignal, signal);
+        if (signed) {
+          res.setHeader("X-Signal-Signature", signed.signature);
+          res.setHeader("X-Signal-Signer", signed.signer);
+          res.setHeader("X-Signal-Eip712-Payload", JSON.stringify(eip712ForTransport(signed.eip712)));
+        }
+      }
+      await recordUsage({ kind: "served", route: "persistence", channel: "rest", asset });
+      res.type("application/json").send(JSON.stringify(body));
+    } catch (err) {
+      logger.error({ err, asset }, "falha gerando relatório de persistência");
+      await recordUsage({ kind: "failed", route: "persistence", channel: "rest", asset });
+      res.status(503).json({ error: "falha temporária lendo o histórico atestado — tente de novo em instantes" });
     }
   }
 
@@ -1058,7 +1233,8 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
       | "rest-durability"
       | "rest-capacity"
       | "rest-sensitivity"
-      | "rest-exposure" = "rest",
+      | "rest-exposure"
+      | "rest-persistence" = "rest",
   ): void {
     logger.info({ channel, asset }, "sinal servido");
   }
@@ -1163,6 +1339,20 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
     );
   }
 
+  // Rotas de PERSISTÊNCIA — sem query param: o relatório é do asset inteiro e
+  // não recebe nada do comprador, então não há 400 possível depois do pagamento.
+  for (const asset of Object.keys(PERSISTENCE_PATHS) as AssetId[]) {
+    app.get(
+      PERSISTENCE_PATHS[asset],
+      usageEntryMiddleware("persistence", asset),
+      paymentMiddlewareFromHTTPServer(server),
+      async (_req, res) => {
+        logUsage(asset, "rest-persistence");
+        await respondWithPersistence(res, asset);
+      },
+    );
+  }
+
   // Aliases curtos → caminho canônico. Um comprador (humano ou agente) que
   // adivinha o óbvio `/decision/usdc` em vez de `/decision/usdc-base-yield`
   // recebia um 404 mudo; agora é redirecionado (308 preserva método e query)
@@ -1208,6 +1398,7 @@ export async function createApp(): Promise<{ app: express.Express; payToEvmAddre
         capacity: Object.values(CAPACITY_PATHS),
         sensitivity: Object.values(SENSITIVITY_PATHS),
         exposure: Object.values(EXPOSURE_PATHS),
+        persistence: Object.values(PERSISTENCE_PATHS),
         free: [
           "/accuracy.json",
           "/track-record.json",

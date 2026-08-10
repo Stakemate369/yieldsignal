@@ -150,8 +150,52 @@ for (const l of linhas.sort((a, b) => a.rota.localeCompare(b.rota))) {
   console.log(`${l.rota.padEnd(30)} índice ${usd(l.indexado).padStart(7)}  real ${usd(l.atual).padStart(7)}  ${marca}`);
 }
 
+/**
+ * Rotas que EXISTEM mas nunca apareceram no índice.
+ *
+ * Buraco encontrado em 2026-08-10, ao lançar a família /persistence: este script
+ * só conferia o que já estava indexado, então uma rota nova era invisível pra
+ * ele — ficava fora do Bazaar indefinidamente sem ninguém notar, porque o
+ * relatório dizia "0 rotas a corrigir" e estava tecnicamente certo.
+ *
+ * O Bazaar indexa por VENDA, não por cadastro: rota nova só entra depois do
+ * primeiro pagamento liquidado. E o Bazaar é o principal canal de descoberta do
+ * serviço — lançar produto e não indexá-lo é lançar pra ninguém.
+ *
+ * A lista canônica vem do /openapi.json da própria produção (não de um array
+ * escrito aqui, que é como divergências nascem).
+ */
+async function rotasPublicadas() {
+  const res = await fetch(`${BASE}/openapi.json`);
+  if (!res.ok) throw new Error(`/openapi.json devolveu HTTP ${res.status}`);
+  const j = await res.json();
+  return Object.keys(j.paths ?? {});
+}
+
+const indexadas = new Set(linhas.map((l) => l.rota));
+const ausentes = [];
+for (const rota of await rotasPublicadas()) {
+  if (indexadas.has(rota)) continue;
+  const atual = await precoAtual(rota);
+  if (atual == null) {
+    console.log(`${rota.padEnd(30)} não consegui ler o preço atual — pulando`);
+    continue;
+  }
+  ausentes.push({ rota, indexado: null, atual, divergente: true, ausenteDoIndice: true });
+}
+if (ausentes.length > 0) {
+  console.log("");
+  for (const l of ausentes.sort((a, b) => a.rota.localeCompare(b.rota))) {
+    console.log(`${l.rota.padEnd(30)} índice       —  real ${("$" + (l.atual / 1e6).toFixed(2)).padStart(7)}  AUSENTE DO ÍNDICE`);
+  }
+}
+
 const estado = lerEstado();
-const divergentes = linhas.filter((l) => l.divergente);
+// Ausentes entram na mesma fila das desatualizadas — e, o que mais importa,
+// passam pela MESMA trava de carência: uma rota nova paga uma vez e leva horas
+// pra aparecer; sem a trava, a execução seguinte pagaria de novo pela mesma
+// coisa. Foi assim que uma cobrança dupla aconteceu em 2026-08-10.
+const divergentes = [...linhas.filter((l) => l.divergente), ...ausentes];
 
 // Separa "o índice está velho porque ninguém pagou" de "eu já paguei e o índice
 // ainda não propagou". As duas parecem idênticas na leitura do Bazaar.
